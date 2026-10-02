@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import Field
 
 from forge.fileio import looks_binary, normalize_newlines, split_lines
+from forge.security.risk import RiskLevel
 from forge.tools.base import NoArgs, Tool, ToolArgs, ToolContext, ToolError, ToolResult
 
 MAX_READ_FILE_BYTES = 10_000_000
@@ -18,6 +19,7 @@ class CurrentDirectory(Tool):
     name = "current_directory"
     description = "Return the absolute path of the workspace root. All relative paths are resolved from here."
     Args = NoArgs
+    risk = RiskLevel.READ
 
     def execute(self, args: NoArgs, context: ToolContext) -> ToolResult:
         return ToolResult.ok(str(context.workspace.root))
@@ -36,6 +38,7 @@ class ListFiles(Tool):
         "Common noise directories (.git, .venv, node_modules, caches) are skipped."
     )
     Args = ListFilesArgs
+    risk = RiskLevel.READ
 
     def execute(self, args: ListFilesArgs, context: ToolContext) -> ToolResult:
         workspace = context.workspace
@@ -76,6 +79,7 @@ class ReadFile(Tool):
         "max_lines to read a section."
     )
     Args = ReadFileArgs
+    risk = RiskLevel.READ
 
     def execute(self, args: ReadFileArgs, context: ToolContext) -> ToolResult:
         path = context.workspace.resolve(args.path)
@@ -136,6 +140,7 @@ class FileExists(Tool):
     name = "file_exists"
     description = "Check whether a file or directory exists in the workspace."
     Args = FileExistsArgs
+    risk = RiskLevel.READ
 
     def execute(self, args: FileExistsArgs, context: ToolContext) -> ToolResult:
         path = context.workspace.resolve(args.path)
@@ -164,6 +169,7 @@ class SearchText(Tool):
         "Binary files, very large files, and noise directories are skipped."
     )
     Args = SearchTextArgs
+    risk = RiskLevel.READ
 
     def execute(self, args: SearchTextArgs, context: ToolContext) -> ToolResult:
         workspace = context.workspace

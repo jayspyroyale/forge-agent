@@ -1,8 +1,11 @@
 """The single place where tool calls requested by a model are turned into actions.
 
-    ToolCall -> look up tool -> validate arguments -> execute -> ToolResult
+    ToolCall -> look up tool -> validate arguments -> assess risk
+             -> permission engine (allow / ask / deny) -> execute -> ToolResult
 
-`execute` never raises: every problem becomes a failed `ToolResult`, which the
+A tool's `execute` is only reached after the permission engine allows the
+call. `execute` here never raises: every problem (unknown tool, bad
+arguments, denial, tool failure) becomes a failed `ToolResult`, which the
 agent passes back to the model as information it can react to.
 """
 
@@ -11,15 +14,24 @@ import asyncio
 from pydantic import ValidationError
 
 from forge.models.types import ToolCall
+from forge.security.permissions import PermissionEngine, PermissionRequest
 from forge.tools.base import Tool, ToolArgs, ToolContext, ToolError, ToolResult
 from forge.tools.registry import ToolNotFoundError, ToolRegistry
 from forge.workspace import WorkspaceError
 
 
 class ToolExecutor:
-    def __init__(self, registry: ToolRegistry, context: ToolContext) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        context: ToolContext,
+        permissions: PermissionEngine | None = None,
+    ) -> None:
         self.registry = registry
         self.context = context
+        # Without an explicit engine: the default policy and nobody to ask,
+        # so reads are allowed and anything that needs approval is refused.
+        self.permissions = permissions or PermissionEngine()
 
     async def execute(self, call: ToolCall) -> ToolResult:
         try:
@@ -33,9 +45,31 @@ class ToolExecutor:
         except ValidationError as error:
             return ToolResult.fail(f"Invalid arguments for '{tool.name}': {summarize_validation_error(error)}")
 
+        try:
+            risk = tool.assess_risk(args, self.context)
+        except WorkspaceError as error:
+            return ToolResult.fail(str(error))
+
+        request = PermissionRequest(
+            tool_name=tool.name,
+            arguments=call.arguments,
+            risk=risk,
+            approval_key=tool.approval_key(args),
+        )
+        outcome = self.permissions.authorize(request)
+        permission_info = {"risk": risk.level.value, "decided_by": outcome.decided_by}
+        if not outcome.allowed:
+            return ToolResult.fail(
+                f"Permission denied: {outcome.reason}. The action was not performed.",
+                denied=True,
+                permission=permission_info,
+            )
+
         # Tools are ordinary blocking functions; run them in a worker thread so
         # the async agent loop is never blocked by slow file or process work.
-        return await asyncio.to_thread(self._run, tool, args)
+        result = await asyncio.to_thread(self._run, tool, args)
+        result.metadata["permission"] = permission_info
+        return result
 
     def _run(self, tool: Tool, args: ToolArgs) -> ToolResult:
         try:

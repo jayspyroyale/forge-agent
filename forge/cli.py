@@ -14,6 +14,7 @@ import typer
 from pydantic import ValidationError
 from rich.console import Console
 from rich.markup import escape
+from rich.prompt import Prompt
 from rich.table import Table
 
 from forge import __version__
@@ -25,6 +26,7 @@ from forge.doctor import run_all_checks
 from forge.models.errors import ModelError
 from forge.models.registry import create_provider, default_registry
 from forge.models.types import Message, ToolCall
+from forge.security.permissions import ApprovalChoice, Approver, PermissionEngine, PermissionRequest
 from forge.tools.base import ToolContext
 from forge.tools.builtin import create_default_tools
 from forge.tools.executor import ToolExecutor
@@ -183,16 +185,21 @@ def run_tool(
     workspace: Annotated[
         Path | None, typer.Option("--workspace", "-w", help="Workspace root (default: current directory).")
     ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Approve actions that need approval (never overrides 'deny').")
+    ] = False,
 ) -> None:
-    """Run one tool directly and print its result."""
+    """Run one tool directly and print its result. Permission rules still apply."""
     try:
         parsed = _parse_tool_arguments(arguments or [], json_arguments)
-        context = ToolContext(workspace=Workspace(workspace or Path.cwd()))
-    except (ValueError, WorkspaceError) as error:
+        config = ForgeConfig.from_env()
+        context = ToolContext(workspace=Workspace(workspace or Path.cwd()), config=config)
+    except (ValueError, ValidationError, WorkspaceError) as error:
         error_console.print(f"[red]Error:[/red] {escape(str(error))}")
         raise typer.Exit(code=2)
 
-    executor = ToolExecutor(create_default_tools(), context)
+    permissions = PermissionEngine(config.permissions, make_cli_approver(auto_approve=yes))
+    executor = ToolExecutor(create_default_tools(), context, permissions)
     result = asyncio.run(executor.execute(ToolCall(id="cli", name=name, arguments=parsed)))
 
     if result.success:
@@ -239,6 +246,9 @@ def run(
     debug: Annotated[
         bool | None, typer.Option("--debug", help="Show full error tracebacks.")
     ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Approve actions that need approval (never overrides 'deny').")
+    ] = False,
 ) -> None:
     """Run the agent on a task in the current directory."""
     try:
@@ -248,7 +258,7 @@ def run(
         raise typer.Exit(code=1)
 
     try:
-        agent = create_agent(config, on_event=_print_event)
+        agent = create_agent(config, approver=make_cli_approver(auto_approve=yes), on_event=_print_event)
         state = asyncio.run(agent.run(task))
     except (ModelError, WorkspaceError) as error:
         if config.debug:
@@ -274,6 +284,34 @@ def _print_event(event: AgentEvent) -> None:
         console.print(f"[cyan]→ {escape(event.call.name)}[/cyan] [dim]{arguments}[/dim]")
     elif isinstance(event, ToolFinished) and not event.result.success:
         console.print(f"  [red]✗ {escape(event.result.error or 'failed')}[/red]")
+
+
+_APPROVAL_CHOICES = {"y": ApprovalChoice.ALLOW_ONCE, "a": ApprovalChoice.ALLOW_SESSION, "n": ApprovalChoice.DENY}
+
+
+def make_cli_approver(auto_approve: bool = False) -> Approver:
+    """An approver that shows the request and asks on the terminal."""
+
+    def approve(request: PermissionRequest) -> ApprovalChoice:
+        risk = request.risk
+        console.print()
+        console.print(f"[bold yellow]Permission needed[/bold yellow]: [bold]{escape(request.tool_name)}[/bold] "
+                      f"[yellow]({risk.level})[/yellow]")
+        for reason in risk.reasons:
+            console.print(f"  [yellow]! {escape(reason)}[/yellow]")
+        console.print(f"  [dim]{escape(_short_json(request.arguments, limit=500))}[/dim]")
+        if auto_approve:
+            console.print("  [green]approved (--yes)[/green]")
+            return ApprovalChoice.ALLOW_ONCE
+        answer = Prompt.ask(
+            "  Allow? [bold]y[/bold]es once, [bold]a[/bold]lways this session, [bold]n[/bold]o",
+            choices=list(_APPROVAL_CHOICES),
+            default="n",
+            console=console,
+        )
+        return _APPROVAL_CHOICES[answer]
+
+    return approve
 
 
 def _short_json(value: Any, limit: int = 100) -> str:

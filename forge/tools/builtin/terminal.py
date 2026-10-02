@@ -10,6 +10,8 @@ import sys
 
 from pydantic import Field
 
+from forge.security.commands import classify_command
+from forge.security.risk import RiskAssessment, RiskLevel
 from forge.terminal import CommandResult, run_command
 from forge.tools.base import Tool, ToolArgs, ToolContext, ToolError, ToolResult
 
@@ -32,6 +34,14 @@ class RunCommand(Tool):
         "and long output is truncated."
     )
     Args = RunCommandArgs
+    risk = RiskLevel.EXECUTE
+
+    def assess_risk(self, args: RunCommandArgs, context: ToolContext) -> RiskAssessment:
+        return classify_command(args.command, context.workspace.root)
+
+    def approval_key(self, args: RunCommandArgs) -> str:
+        # A session approval covers this exact command line, not every command.
+        return f"{self.name}:{args.command}"
 
     def execute(self, args: RunCommandArgs, context: ToolContext) -> ToolResult:
         cwd = context.workspace.resolve(args.cwd)

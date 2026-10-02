@@ -4,6 +4,8 @@ import pytest
 from pydantic import Field
 
 from forge.models.types import ToolCall, ToolDefinition
+from forge.security.permissions import PermissionEngine
+from forge.security.policy import PermissionPolicy
 from forge.tools.base import Tool, ToolArgs, ToolContext, ToolError, ToolResult
 from forge.tools.builtin import create_default_tools
 from forge.tools.executor import ToolExecutor
@@ -42,7 +44,8 @@ class BuggyTool(Tool):
 
 
 def make_executor(tmp_path, *tools):
-    return ToolExecutor(ToolRegistry(list(tools)), ToolContext(workspace=Workspace(tmp_path)))
+    permissions = PermissionEngine(PermissionPolicy.permissive())
+    return ToolExecutor(ToolRegistry(list(tools)), ToolContext(workspace=Workspace(tmp_path)), permissions)
 
 
 def run(executor, name, **arguments):
@@ -128,7 +131,8 @@ def test_successful_result(tmp_path):
     result = run(make_executor(tmp_path, EchoTool()), "echo", text="hi", times=2)
     assert result.success
     assert result.output == "hihi"
-    assert result.metadata == {"length": 2}
+    assert result.metadata["length"] == 2
+    assert result.metadata["permission"] == {"risk": "execute", "decided_by": "policy"}
     assert result.to_model_content() == "hihi"
 
 

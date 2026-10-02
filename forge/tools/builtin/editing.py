@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import Field
 
 from forge.fileio import NotTextError, atomic_write_text, normalize_newlines, read_text_file, split_lines
+from forge.security.risk import RiskLevel
 from forge.tools.base import Tool, ToolArgs, ToolContext, ToolError, ToolResult
 
 MAX_REPORTED_MATCH_LINES = 10
@@ -31,6 +32,7 @@ class WriteFile(Tool):
         "For changes to part of an existing file, use edit_file instead."
     )
     Args = WriteFileArgs
+    risk = RiskLevel.WRITE
 
     def execute(self, args: WriteFileArgs, context: ToolContext) -> ToolResult:
         workspace = context.workspace
@@ -86,6 +88,7 @@ class EditFile(Tool):
         "Unrelated content is left untouched."
     )
     Args = EditFileArgs
+    risk = RiskLevel.WRITE
 
     def execute(self, args: EditFileArgs, context: ToolContext) -> ToolResult:
         workspace = context.workspace

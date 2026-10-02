@@ -10,6 +10,7 @@ from forge.agent.loop import Agent
 from forge.config import ForgeConfig
 from forge.models.base import ModelProvider
 from forge.models.registry import create_provider
+from forge.security.permissions import Approver, PermissionEngine
 from forge.tools.base import ToolContext
 from forge.tools.builtin import create_default_tools
 from forge.tools.executor import ToolExecutor
@@ -22,12 +23,20 @@ def create_agent(
     *,
     provider: ModelProvider | None = None,
     tools: ToolRegistry | None = None,
+    approver: Approver | None = None,
+    permissions: PermissionEngine | None = None,
     on_event: EventHandler | None = None,
 ) -> Agent:
-    """Create an agent. `provider` and `tools` can be injected (tests, custom setups)."""
+    """Create an agent. Everything except `config` can be injected (tests, custom setups).
+
+    Pass `permissions` to share one engine (and its session approvals) across
+    several tasks; otherwise a new engine is built from `config.permissions`
+    and `approver`.
+    """
     workspace = Workspace(config.workspace)
     context = ToolContext(workspace=workspace, config=config)
-    executor = ToolExecutor(tools or create_default_tools(), context)
+    engine = permissions or PermissionEngine(config.permissions, approver)
+    executor = ToolExecutor(tools or create_default_tools(), context, engine)
     return Agent(
         provider or create_provider(config),
         executor,

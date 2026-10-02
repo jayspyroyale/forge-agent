@@ -15,6 +15,8 @@ from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
+from forge.security.policy import PermissionPolicy
+
 # Maps each config field to the environment variable that can set it.
 ENV_VARS = {
     "provider": "FORGE_PROVIDER",
@@ -60,6 +62,7 @@ class ForgeConfig(BaseModel):
     timeout: float = Field(default=120.0, gt=0)
 
     terminal: TerminalSettings = Field(default_factory=TerminalSettings)
+    permissions: PermissionPolicy = Field(default_factory=PermissionPolicy)
 
     @classmethod
     def from_env(cls, **overrides: Any) -> Self:

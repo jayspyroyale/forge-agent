@@ -1,1 +1,1 @@
-"""Permission decisions for agent actions. Full policy logic arrives in a later phase."""
+"""Risk assessment and the permission engine that sits between model requests and execution."""

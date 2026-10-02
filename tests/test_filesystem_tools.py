@@ -144,7 +144,8 @@ def test_list_missing_directory(workspace_root):
 
 def test_file_exists(workspace_root):
     (workspace_root / "src").mkdir()
-    assert run_tool(workspace_root, "file_exists", path="allowed.txt").metadata == {"exists": True, "type": "file"}
+    found = run_tool(workspace_root, "file_exists", path="allowed.txt").metadata
+    assert (found["exists"], found["type"]) == (True, "file")
     assert run_tool(workspace_root, "file_exists", path="src").metadata["type"] == "directory"
     missing = run_tool(workspace_root, "file_exists", path="missing.txt")
     assert missing.success

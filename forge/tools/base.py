@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 from forge.config import ForgeConfig
 from forge.models.types import ToolDefinition
+from forge.security.risk import RiskAssessment, RiskLevel
 from forge.workspace import Workspace
 
 
@@ -75,10 +76,20 @@ class Tool(ABC):
     name: ClassVar[str]
     description: ClassVar[str]
     Args: ClassVar[type[ToolArgs]] = NoArgs
+    # Tools that don't say otherwise are treated as running programs: they need approval by default.
+    risk: ClassVar[RiskLevel] = RiskLevel.EXECUTE
 
     @abstractmethod
     def execute(self, args: Any, context: ToolContext) -> ToolResult:
         """Perform the action. `args` is an instance of `self.Args`, already validated."""
+
+    def assess_risk(self, args: Any, context: ToolContext) -> RiskAssessment:
+        """How risky this particular call is. Override when it depends on the arguments."""
+        return RiskAssessment(level=self.risk)
+
+    def approval_key(self, args: Any) -> str:
+        """What a "yes, for this session" approval covers. By default: any call to this tool."""
+        return self.name
 
     def definition(self) -> ToolDefinition:
         schema = self.Args.model_json_schema()

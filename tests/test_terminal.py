@@ -161,13 +161,16 @@ def test_tool_timeout_is_capped_by_config(workspace_root):
 
     from forge.config import ForgeConfig, TerminalSettings
     from forge.models.types import ToolCall
+    from forge.security.permissions import PermissionEngine
+    from forge.security.policy import PermissionPolicy
     from forge.tools.base import ToolContext
     from forge.tools.builtin import create_default_tools
     from forge.tools.executor import ToolExecutor
     from forge.workspace import Workspace
 
     config = ForgeConfig(terminal=TerminalSettings(timeout=1, max_timeout=1))
-    executor = ToolExecutor(create_default_tools(), ToolContext(workspace=Workspace(workspace_root), config=config))
+    context = ToolContext(workspace=Workspace(workspace_root), config=config)
+    executor = ToolExecutor(create_default_tools(), context, PermissionEngine(PermissionPolicy.permissive()))
     call = ToolCall(id="t", name="run_command", arguments={"command": py("import time; time.sleep(60)"), "timeout": 500})
 
     started = time.monotonic()

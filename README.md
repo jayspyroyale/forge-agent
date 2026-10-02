@@ -44,6 +44,7 @@ Eventually, an AI model running inside Forge should be able to:
 - Read-only built-in tools: `current_directory`, `list_files`, `read_file`, `file_exists`, `search_text`, all confined to the workspace (no `..` or symlink escapes)
 - Editing tools: `write_file` (new files; replacing needs `overwrite=true`) and `edit_file` (exact, unique text replacement; never guesses between multiple matches). Writes are atomic and keep each file's line endings
 - `run_command`: runs a shell command in the workspace with a timeout (whole process tree killed), capped output (start and end kept), and secret-looking environment variables removed
+- Permission system between the model and every tool call: each call is classified `read` / `write` / `execute` / `dangerous`, then allowed, asked (yes once / always this session / no), or denied by policy (default: read=allow, write=ask, execute=ask, dangerous=deny). A heuristic classifier flags destructive shell commands (recursive deletes, `git reset --hard`, disk formatting, privilege escalation, paths outside the workspace, ...). `--yes` approves "ask" actions but never overrides "deny"
 - `forge tools list | describe | run` — inspect and run tools directly, without a model
 - `forge run "task"` — the agent loop: model → tool calls → results back to the model → final answer, with a hard step limit (`--max-steps`)
 - Configuration through `FORGE_*` environment variables
@@ -53,7 +54,6 @@ Eventually, an AI model running inside Forge should be able to:
 
 Everything below is **not implemented yet**:
 
-- Permission system with user approval prompts
 - More providers (Anthropic, Gemini, DeepSeek, ...)
 - Streaming replies
 - MCP server support

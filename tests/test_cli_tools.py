@@ -56,3 +56,30 @@ def test_tools_run_bad_arguments(workspace_root):
 def test_tools_run_invalid_json(workspace_root):
     result = runner.invoke(app, ["tools", "run", "read_file", "--json", "{oops", "-w", str(workspace_root)])
     assert result.exit_code == 2
+
+
+def test_tools_run_write_asks_and_respects_no(workspace_root):
+    result = runner.invoke(
+        app, ["tools", "run", "write_file", "path=new.txt", "content=hi", "-w", str(workspace_root)], input="n\n"
+    )
+    assert result.exit_code == 1
+    assert "Permission needed" in result.output
+    assert "denied by the user" in result.output
+    assert not (workspace_root / "new.txt").exists()
+
+
+def test_tools_run_write_with_yes(workspace_root):
+    result = runner.invoke(
+        app, ["tools", "run", "write_file", "path=new.txt", "content=hi", "-w", str(workspace_root), "--yes"]
+    )
+    assert result.exit_code == 0
+    assert (workspace_root / "new.txt").read_text() == "hi"
+
+
+def test_tools_run_dangerous_command_denied_even_with_yes(workspace_root):
+    result = runner.invoke(
+        app, ["tools", "run", "run_command", "command=rm -rf .", "-w", str(workspace_root), "--yes"]
+    )
+    assert result.exit_code == 1
+    assert "dangerous actions are denied by policy" in result.output
+    assert (workspace_root / "allowed.txt").exists()
