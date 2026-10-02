@@ -135,3 +135,28 @@ def test_run_without_api_key_shows_clear_error(workspace_root, monkeypatch):
     result = runner.invoke(app, ["run", "task"])
     assert result.exit_code == 1
     assert "OPENAI_API_KEY" in result.output
+
+
+def test_run_shows_verification_evidence(calculator_project, monkeypatch):
+    from forge.models.types import ModelResponse, ToolCall
+
+    monkeypatch.chdir(calculator_project)
+    fix = ToolCall(
+        id="c1",
+        name="edit_file",
+        arguments={
+            "path": "calculator.py",
+            "old_text": "return a + b  # BUG: should be a * b",
+            "new_text": "return a * b",
+        },
+    )
+    _script_provider(monkeypatch, [ModelResponse(tool_calls=[fix]), "Fixed multiply."])
+
+    result = runner.invoke(app, ["run", "--yes", "Fix multiply"])
+
+    assert result.exit_code == 0, result.output
+    assert "verifying: pytest" in result.output
+    assert "Changed: calculator.py" in result.output
+    assert "✓ test" in result.output
+    assert "pytest passed" in result.output
+    assert "- lint" in result.output

@@ -97,3 +97,9 @@ LAST_STEP_NOTE = (
     "[Forge] This is your last step. Do not call more tools. Give your final answer now: "
     "what you did, what is verified, and what is still unfinished."
 )
+
+VERIFICATION_FAILED_NOTE = """[Forge] Forge ran the project's checks after your changes, and some failed:
+
+{failures}
+
+Fix the cause. Forge will run the checks again when you give your final answer."""

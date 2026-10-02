@@ -18,11 +18,12 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from forge import __version__
-from forge.agent.events import AgentEvent, ToolFinished, ToolStarted
-from forge.agent.runtime import create_agent
+from forge.agent.events import AgentEvent, ToolFinished, ToolStarted, VerificationFinished, VerificationStarted
+from forge.agent.runtime import run_task
 from forge.agent.state import AgentStatus
 from forge.config import ForgeConfig
 from forge.doctor import run_all_checks
+from forge.evidence import TaskEvidence
 from forge.models.errors import ModelError
 from forge.models.registry import create_provider, default_registry
 from forge.models.types import Message, ToolCall
@@ -258,17 +259,20 @@ def run(
         raise typer.Exit(code=1)
 
     try:
-        agent = create_agent(config, approver=make_cli_approver(auto_approve=yes), on_event=_print_event)
-        state = asyncio.run(agent.run(task))
+        outcome = asyncio.run(
+            run_task(config, task, approver=make_cli_approver(auto_approve=yes), on_event=_print_event)
+        )
     except (ModelError, WorkspaceError) as error:
         if config.debug:
             error_console.print_exception()
         error_console.print(f"[red]Error:[/red] {escape(str(error))}")
         raise typer.Exit(code=1)
 
+    state, evidence = outcome.state, outcome.evidence
     if state.final_answer:
         console.print()
         console.print(state.final_answer, markup=False, highlight=False, soft_wrap=True)
+    _print_evidence(evidence)
     console.print()
     if state.status == AgentStatus.COMPLETED:
         steps = "1 step" if state.step == 1 else f"{state.step} steps"
@@ -284,6 +288,24 @@ def _print_event(event: AgentEvent) -> None:
         console.print(f"[cyan]→ {escape(event.call.name)}[/cyan] [dim]{arguments}[/dim]")
     elif isinstance(event, ToolFinished) and not event.result.success:
         console.print(f"  [red]✗ {escape(event.result.error or 'failed')}[/red]")
+    elif isinstance(event, VerificationStarted):
+        console.print(f"[magenta]⧗ verifying: {escape(event.name)}[/magenta]")
+    elif isinstance(event, VerificationFinished):
+        color = "green" if event.result.passed else "red"
+        console.print(f"  [{color}]{escape(event.result.status)}[/{color}]")
+
+
+_OUTCOME_STYLE = {"verified": ("green", "✓"), "failed": ("red", "✗"), "unverified": ("yellow", "-")}
+
+
+def _print_evidence(evidence: TaskEvidence) -> None:
+    console.print()
+    if evidence.files_changed:
+        console.print("[bold]Changed:[/bold] " + escape(", ".join(evidence.files_changed)))
+    console.print("[bold]Verification:[/bold]")
+    for check in evidence.checks:
+        color, mark = _OUTCOME_STYLE[check.outcome]
+        console.print(f"  [{color}]{mark} {check.kind}[/{color}] [dim]{escape(check.detail)}[/dim]")
 
 
 _APPROVAL_CHOICES = {"y": ApprovalChoice.ALLOW_ONCE, "a": ApprovalChoice.ALLOW_SESSION, "n": ApprovalChoice.DENY}

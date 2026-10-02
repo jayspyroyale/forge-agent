@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from forge.models.types import ModelResponse, ToolCall
 from forge.tools.base import ToolResult
+from forge.verification.checks import VerificationResult
 
 
 class AgentEvent(BaseModel):
@@ -47,6 +48,17 @@ class AgentFinished(AgentEvent):
     steps: int
     final_answer: str | None = None
     error: str | None = None
+
+
+class VerificationStarted(AgentEvent):
+    step: int
+    name: str
+    command: str
+
+
+class VerificationFinished(AgentEvent):
+    step: int
+    result: VerificationResult
 
 
 EventHandler = Callable[[AgentEvent], None]

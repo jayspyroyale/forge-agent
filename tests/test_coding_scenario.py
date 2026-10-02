@@ -80,8 +80,17 @@ def test_scripted_agent_inspects_edits_and_verifies(calculator_project):
     assert "4 passed" in history[4].result.output
     assert run_pytest(calculator_project).returncode == 0
 
-    # Writes and commands went through the approver; reads did not.
-    assert approvals == [("run_command", "execute"), ("edit_file", "write"), ("run_command", "execute")]
+    # Writes, commands, and Forge's own verification went through the approver; reads did not.
+    assert approvals == [
+        ("run_command", "execute"),
+        ("edit_file", "write"),
+        ("run_command", "execute"),
+        ("verification", "execute"),
+    ]
+
+    # Forge verified independently after the agent said it was done.
+    assert len(state.verification_rounds) == 1
+    assert state.verification_rounds[0].passed
 
 
 def test_tool_results_reach_the_model_in_order(calculator_project):

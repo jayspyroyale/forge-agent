@@ -11,7 +11,7 @@ object that might be printed, logged, or saved.
 
 import os
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field
 
@@ -60,6 +60,11 @@ class ForgeConfig(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     # Seconds to wait for a model reply. Generous because local models can be slow.
     timeout: float = Field(default=120.0, gt=0)
+
+    # "auto": after the agent changes files, Forge runs the project's checks before accepting "done".
+    verification: Literal["auto", "off"] = "auto"
+    # How many times Forge verifies (and sends failures back) before giving up.
+    verification_attempts: int = Field(default=3, ge=1)
 
     terminal: TerminalSettings = Field(default_factory=TerminalSettings)
     permissions: PermissionPolicy = Field(default_factory=PermissionPolicy)
