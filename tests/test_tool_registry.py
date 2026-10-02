@@ -115,6 +115,7 @@ def test_default_tools_are_registered():
         "file_exists",
         "list_files",
         "read_file",
+        "run_command",
         "search_text",
         "write_file",
     ]

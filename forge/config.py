@@ -26,6 +26,16 @@ ENV_VARS = {
 }
 
 
+class TerminalSettings(BaseModel):
+    """Limits for commands Forge runs."""
+
+    # Default seconds a command may run; a tool call can ask for less or more, up to max_timeout.
+    timeout: float = Field(default=120.0, gt=0)
+    max_timeout: float = Field(default=600.0, gt=0)
+    # Characters kept from each of stdout and stderr.
+    output_limit: int = Field(default=12_000, ge=500)
+
+
 class ForgeConfig(BaseModel):
     """Settings for a Forge session."""
 
@@ -48,6 +58,8 @@ class ForgeConfig(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     # Seconds to wait for a model reply. Generous because local models can be slow.
     timeout: float = Field(default=120.0, gt=0)
+
+    terminal: TerminalSettings = Field(default_factory=TerminalSettings)
 
     @classmethod
     def from_env(cls, **overrides: Any) -> Self:
