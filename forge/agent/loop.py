@@ -142,6 +142,26 @@ class Agent:
         state.status = AgentStatus.COMPLETED
         state.final_answer = answer
 
+    async def verify_final(self, state: AgentState) -> VerificationRound | None:
+        """Verify once more after the loop, if the workspace may have changed since the last check.
+
+        The loop only notices changes made by file-editing tools. A command
+        (a formatter, a code generator, `sed -i`, ...) can change files too;
+        the runtime calls this when its workspace comparison shows changes
+        that no verification round has covered yet. A failure here cannot be
+        sent back to the model anymore, so a completed task becomes
+        `verification_failed`.
+        """
+        if self.verifier is None or not self.verifier.checks:
+            return None
+        if state.verification_rounds and state.verification_rounds[-1].step >= state.last_mutation_step():
+            return None
+        round_ = await self._verify(state)
+        if not round_.passed and state.status == AgentStatus.COMPLETED:
+            state.status = AgentStatus.VERIFICATION_FAILED
+            state.error = "Forge's final verification failed after the agent finished."
+        return round_
+
     def _needs_verification(self, state: AgentState) -> bool:
         if self.verifier is None or not self.verifier.checks:
             return False

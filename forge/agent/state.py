@@ -76,6 +76,17 @@ class AgentState(BaseModel):
                     paths[path] = None
         return list(paths)
 
+    def last_mutation_step(self) -> int:
+        """The last step with a tool call that changed, or may have changed, files (edits and commands)."""
+        steps = [
+            execution.step
+            for execution in self.tool_history
+            # A command can change files even when it exits with an error.
+            if (execution.result.success and execution.result.metadata.get("changed_paths"))
+            or "exit_code" in execution.result.metadata
+        ]
+        return max(steps, default=0)
+
     def change_count(self) -> int:
         """How many successful file-changing tool calls happened. Used to decide when to re-verify."""
         return sum(

@@ -108,6 +108,8 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
     state = await agent.run(task, task_id=task_id)
 
     changes = compute_changes(snapshot, workspace, repo, journal.pre_images() if journal else None)
+    if changes.changes:
+        await agent.verify_final(state)
     configured = agent.verifier.available_kinds if agent.verifier else set()
     evidence = build_evidence(
         state,

@@ -183,3 +183,32 @@ def test_denied_tools_are_recorded(calculator_project):
     assert usage.denied
     assert not usage.success
     assert outcome.evidence.files_changed == []
+
+
+def _rewrite_with_command(call_id, new_body):
+    script = f"import pathlib; p = pathlib.Path('calculator.py'); p.write_text(p.read_text().replace({BUG!r}, {new_body!r}))"
+    return tool(call_id, "run_command", command=f'"{sys.executable}" -c "{script}"')
+
+
+def test_changes_made_by_a_command_are_verified_before_reporting(calculator_project):
+    # The model breaks the code with a command (not an edit tool) and claims success.
+    outcome, _ = run(calculator_project, [_rewrite_with_command("c1", WRONG_FIX), "Done, all good."])
+
+    assert "return a - b" in (calculator_project / "calculator.py").read_text()
+    assert len(outcome.state.verification_rounds) == 1  # Forge's final check
+    assert outcome.state.status == AgentStatus.VERIFICATION_FAILED
+    assert report(outcome.evidence)["test"] == "failed"
+
+
+def test_command_fix_is_verified_and_passes(calculator_project):
+    outcome, _ = run(calculator_project, [_rewrite_with_command("c1", FIX), "Fixed with a command."])
+
+    assert outcome.state.status == AgentStatus.COMPLETED
+    assert report(outcome.evidence)["test"] == "verified"
+
+
+def test_no_final_verification_without_changes(calculator_project):
+    outcome, _ = run(calculator_project, [tool("c1", "run_command", command=PYTEST), "Tests fail, nothing changed."])
+
+    assert outcome.state.verification_rounds == []
+    assert outcome.state.status == AgentStatus.COMPLETED
