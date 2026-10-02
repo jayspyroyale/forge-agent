@@ -62,4 +62,11 @@ class VerificationFinished(AgentEvent):
     result: VerificationResult
 
 
+class Notice(AgentEvent):
+    """Something the user should know that is not part of the agent's work (e.g. memory unavailable)."""
+
+    level: str = "info"  # info | warning
+    message: str
+
+
 EventHandler = Callable[[AgentEvent], None]

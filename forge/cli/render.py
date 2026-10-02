@@ -12,6 +12,7 @@ from forge.agent.events import (
     AgentEvent,
     ModelRequested,
     ModelResponded,
+    Notice,
     TaskStarted,
     ToolFinished,
     ToolStarted,
@@ -42,6 +43,10 @@ class TaskRenderer:
 
     def _on_TaskStarted(self, event: TaskStarted) -> None:
         self.console.print(f"[bold cyan]Task:[/bold cyan] {escape(event.task)}")
+
+    def _on_Notice(self, event: Notice) -> None:
+        style = "yellow" if event.level == "warning" else "dim"
+        self.console.print(f"[{style}]! {escape(event.message)}[/{style}]")
 
     def _on_ModelRequested(self, event: ModelRequested) -> None:
         if self.verbose:

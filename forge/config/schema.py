@@ -63,6 +63,17 @@ class ContextSettings(Section):
     retrieval_max_files: int = Field(default=8, ge=0, le=50)
 
 
+class MemorySettings(Section):
+    """Persistent project memory (see forge.memory)."""
+
+    enabled: bool = True
+    path: Path | None = None  # None: <FORGE_HOME or ~/.forge>/memory.db
+    project: str | None = None  # memory scope; None: the workspace root
+    max_items: int = Field(default=8, ge=0, le=50)  # memories shown to the agent per task
+    detect_facts: bool = True  # record facts read from project files (package manager, languages)
+    model_writes: bool = False  # give the agent a `remember` tool (needs approval; stored as low confidence)
+
+
 class UISettings(Section):
     verbose: bool = False
     debug: bool = False
@@ -111,6 +122,7 @@ class ForgeConfig(Section):
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     terminal: TerminalSettings = Field(default_factory=TerminalSettings)
     context: ContextSettings = Field(default_factory=ContextSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
     ui: UISettings = Field(default_factory=UISettings)
     exploration: ExplorationSettings = Field(default_factory=ExplorationSettings)
 
