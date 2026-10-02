@@ -1,5 +1,8 @@
 """Shared pytest setup. pytest loads this file automatically before running tests."""
 
+import shutil
+from pathlib import Path
+
 import pytest
 
 from forge.config import ENV_VARS
@@ -33,3 +36,14 @@ def workspace_root(tmp_path):
     (root / "allowed.txt").write_text("hello from inside\n", encoding="utf-8")
     (tmp_path / "outside.txt").write_text("secret from outside\n", encoding="utf-8")
     return root
+
+
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+
+
+@pytest.fixture
+def calculator_project(tmp_path):
+    """A fresh copy of examples/broken_calculator (multiply is buggy; 2 of 4 tests fail)."""
+    target = tmp_path / "calc"
+    shutil.copytree(EXAMPLES / "broken_calculator", target, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+    return target

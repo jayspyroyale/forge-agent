@@ -7,6 +7,7 @@ call it once per candidate to get fully independent runtimes.
 
 from forge.agent.events import EventHandler
 from forge.agent.loop import Agent
+from forge.agent.prompts import build_system_prompt
 from forge.config import ForgeConfig
 from forge.models.base import ModelProvider
 from forge.models.registry import create_provider
@@ -36,10 +37,17 @@ def create_agent(
     workspace = Workspace(config.workspace)
     context = ToolContext(workspace=workspace, config=config)
     engine = permissions or PermissionEngine(config.permissions, approver)
-    executor = ToolExecutor(tools or create_default_tools(), context, engine)
+    registry = tools or create_default_tools()
+    executor = ToolExecutor(registry, context, engine)
+    system_prompt = build_system_prompt(
+        "coding",
+        workspace=str(workspace.root),
+        tool_names=registry.names(),
+    )
     return Agent(
         provider or create_provider(config),
         executor,
         max_steps=config.max_steps,
+        system_prompt=system_prompt,
         on_event=on_event,
     )

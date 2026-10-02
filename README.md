@@ -45,6 +45,8 @@ Eventually, an AI model running inside Forge should be able to:
 - Editing tools: `write_file` (new files; replacing needs `overwrite=true`) and `edit_file` (exact, unique text replacement; never guesses between multiple matches). Writes are atomic and keep each file's line endings
 - `run_command`: runs a shell command in the workspace with a timeout (whole process tree killed), capped output (start and end kept), and secret-looking environment variables removed
 - Permission system between the model and every tool call: each call is classified `read` / `write` / `execute` / `dangerous`, then allowed, asked (yes once / always this session / no), or denied by policy (default: read=allow, write=ask, execute=ask, dangerous=deny). A heuristic classifier flags destructive shell commands (recursive deletes, `git reset --hard`, disk formatting, privilege escalation, paths outside the workspace, ...). `--yes` approves "ask" actions but never overrides "deny"
+- A concise coding-agent policy (inspect before editing, search instead of guessing, minimal targeted changes, verify, report honestly) built from composable prompt sections in `forge/agent/prompts.py`, plus loop guidance: notes on repeated identical failures, a nudge after several failures in a row, one retry on an empty reply, and a last-step warning
+- `examples/broken_calculator/`: a tiny project with a deliberate bug for trying Forge end to end
 - `forge tools list | describe | run` — inspect and run tools directly, without a model
 - `forge run "task"` — the agent loop: model → tool calls → results back to the model → final answer, with a hard step limit (`--max-steps`)
 - Configuration through `FORGE_*` environment variables

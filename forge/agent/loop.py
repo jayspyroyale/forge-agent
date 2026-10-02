@@ -19,6 +19,8 @@ from forge.agent.events import (
     ToolFinished,
     ToolStarted,
 )
+from forge.agent.guidance import FailureTracker
+from forge.agent.prompts import EMPTY_RESPONSE_NOTE, LAST_STEP_NOTE
 from forge.agent.state import AgentState, AgentStatus, ToolExecution
 from forge.models.base import ModelProvider
 from forge.models.errors import ModelError
@@ -45,9 +47,13 @@ class Agent:
         self.max_steps = max_steps
         self.system_prompt = system_prompt
         self.on_event = on_event
+        self._failures = FailureTracker()
+        self._nudged_empty_reply = False
 
     async def run(self, task: str) -> AgentState:
         state = AgentState(task=task)
+        self._failures = FailureTracker()
+        self._nudged_empty_reply = False
         if self.system_prompt:
             state.messages.append(Message.system(self.system_prompt))
         state.messages.append(Message.user(task))
@@ -76,6 +82,8 @@ class Agent:
     async def _step(self, state: AgentState) -> None:
         """One model call, plus any tool calls it requested."""
         state.step += 1
+        if state.step == self.max_steps and self.max_steps > 1:
+            state.messages.append(Message.user(LAST_STEP_NOTE))
         response = await self._ask_model(state)
         if response is None:
             return
@@ -84,6 +92,11 @@ class Agent:
             Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
         )
         if not response.tool_calls:
+            if not response.content.strip() and not self._nudged_empty_reply:
+                # An empty reply is usually a glitch, not a finished task: ask once more.
+                self._nudged_empty_reply = True
+                state.messages.append(Message.user(EMPTY_RESPONSE_NOTE))
+                return
             state.status = AgentStatus.COMPLETED
             state.final_answer = response.content
             return
@@ -110,9 +123,11 @@ class Agent:
         self._emit(ToolStarted(step=state.step, call=call))
         result = await self.executor.execute(call)
         state.tool_history.append(ToolExecution(step=state.step, call=call, result=result))
-        state.messages.append(
-            Message(role="tool", content=result.to_model_content(), tool_call_id=call.id)
-        )
+        content = result.to_model_content()
+        note = self._failures.note_for(call, result)
+        if note:
+            content += "\n\n" + note
+        state.messages.append(Message(role="tool", content=content, tool_call_id=call.id))
         self._emit(ToolFinished(step=state.step, call=call, result=result))
 
     def _emit(self, event: AgentEvent) -> None:
