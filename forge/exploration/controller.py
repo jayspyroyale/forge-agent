@@ -67,6 +67,7 @@ class ExplorationController:
         provider_factory: Callable[[ForgeConfig], ModelProvider] | None = None,
         on_event: ExplorationEventHandler | None = None,
         candidate_events: Callable[[str], EventHandler | None] | None = None,
+        checks=None,
     ) -> None:
         self.config = config
         self.workspace = workspace_from_config(config)
@@ -75,6 +76,7 @@ class ExplorationController:
         self.provider_factory = provider_factory or (lambda candidate_config: create_provider(candidate_config))
         self.on_event = on_event
         self.candidate_events = candidate_events
+        self.checks = checks
         self.store = ExplorationStore(self.workspace)
 
     @property
@@ -277,7 +279,7 @@ class ExplorationController:
             candidate_brief(run.task, plan),
             provider=self._provider(config),
             permissions=self.permissions,
-            checks=detect_checks(root, environment_root=self.workspace.root),
+            checks=self.checks if self.checks is not None else detect_checks(root, environment_root=self.workspace.root),
             on_event=handler,
             operation_guard=self.budget.check,
             deadline=self.budget.deadline,

@@ -1,0 +1,7 @@
+name = "performance_improvement"
+task = "Improve unique(values) to use at most one traversal while preserving order, supporting hashable values and returning a list."
+command = "{python} verify.py"
+[constraints]
+no_new_dependencies = true
+max_files_changed = 5
+

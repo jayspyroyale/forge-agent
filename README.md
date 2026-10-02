@@ -1,244 +1,213 @@
 # Forge
 
-Forge is a lightweight, model-agnostic runtime for building AI agents that can safely interact with software projects.
+Most coding agents commit to the model's first solution. **Forge explores alternative real implementations, verifies each in isolation, and selects using evidence and your priorities.**
 
-> **Status: early development.** Forge can run an agent loop: a model reads your project through workspace-confined tools and answers. Editing, command execution, and permissions are being added phase by phase.
+Forge is an open-source, model-agnostic Python runtime. Normal tasks and every exploration candidate share one agent runtime, tool registry, permission engine, context engine, verification system and proof of work.
 
-## What is Forge?
+```mermaid
+flowchart TD
+    U[User task and priorities] --> C[CLI and configuration]
+    C --> R[Normal run: AgentRuntime]
+    C --> E[ExplorationController: structured plans]
+    E --> A[Candidate A / workspace A / AgentRuntime]
+    E --> B[Candidate B / workspace B / AgentRuntime]
+    E --> D[Candidate C / workspace C / AgentRuntime]
+    R & A & B & D --> P[Provider layer → Permissions → Tools]
+    P --> V[Context and provenance → Verification → Proof of work]
+    V --> X[Measured comparison + optional labelled model review]
+    X --> S[Manual / assisted / autonomous selection]
+    S --> F[Preview → safe apply → reversible task record]
+    M[Project memory] --> R & A & B & D
+```
 
-Forge aims to be a small, readable runtime that sits between an AI model and your codebase. The model decides *what* to do; Forge provides the tools to do it, enforces a permission system around those tools, and keeps the whole loop understandable.
+## Quickstart
 
-Design goals:
+Requires **Python 3.12+**; Git is required for Git worktrees.
 
-- **Lightweight** — few dependencies, small modules, easy to read end to end.
-- **Model-agnostic** — no lock-in to a single AI provider.
-- **MCP-native** — tools from Model Context Protocol servers should feel first-class.
-- **Safe by default** — actions that touch your files or system must pass a permission check.
-
-## Long-term vision
-
-Eventually, an AI model running inside Forge should be able to:
-
-- inspect, search, and edit files in a repository
-- run terminal commands and test its own work
-- use different model providers (OpenAI, Anthropic, Gemini, local models, ...)
-- connect to MCP servers
-- maintain memory across sessions
-- do all of this under an explicit permission and safety system
-
-## Current status
-
-### Available now
-
-- Installable Python package (`pip install -e .`)
-- `forge --help`, `forge --version`
-- `forge doctor` — local environment checks (Python version, package, workspace, Git, configuration)
-- `forge models list` — show the available model providers
-- `forge ask "..."` — send one prompt to a model and print the reply
-- A model-agnostic layer: normalized message, tool-call, response, and usage types; a provider interface; a provider registry; Forge-level model errors
-- Model providers:
-  - `openai` — OpenAI Chat Completions API
-  - `ollama` — local models through Ollama's OpenAI-compatible API
-  - `fake` — offline provider for tests
-- Tool system: tool interface, registry, executor, and neutral JSON-Schema tool definitions
-- Read-only built-in tools: `current_directory`, `list_files`, `read_file`, `file_exists`, `search_text`, all confined to the workspace (no `..` or symlink escapes)
-- Editing tools: `write_file` (new files; replacing needs `overwrite=true`) and `edit_file` (exact, unique text replacement; never guesses between multiple matches). Writes are atomic and keep each file's line endings
-- `run_command`: runs a shell command in the workspace with a timeout (whole process tree killed), capped output (start and end kept), and secret-looking environment variables removed
-- Permission system between the model and every tool call: each call is classified `read` / `write` / `execute` / `dangerous`, then allowed, asked (yes once / always this session / no), or denied by policy (default: read=allow, write=ask, execute=ask, dangerous=deny). A heuristic classifier flags destructive shell commands (recursive deletes, `git reset --hard`, disk formatting, privilege escalation, paths outside the workspace, ...). `--yes` approves "ask" actions but never overrides "deny"
-- A concise coding-agent policy (inspect before editing, search instead of guessing, minimal targeted changes, verify, report honestly) built from composable prompt sections in `forge/agent/prompts.py`, plus loop guidance: notes on repeated identical failures, a nudge after several failures in a row, one retry on an empty reply, and a last-step warning
-- `examples/broken_calculator/`: a tiny project with a deliberate bug for trying Forge end to end
-- Verification-first completion: Forge detects checks from the project's own config (pytest, ruff, mypy, package.json scripts, cargo, go) and, after the agent changes files, runs them itself before accepting "done". Failures go back to the model to fix (up to 3 attempts)
-- Proof of work: every task produces `TaskEvidence` built only from Forge's records (tools used, commands run, files changed, verification results), reported as VERIFIED / FAILED / UNVERIFIED. A model saying "tests pass" is not evidence
-- Git awareness: read-only `git_status` / `git_diff` tools for the model; a repository reader that refuses any state-changing git command
-- Task tracking: each `forge run` snapshots the workspace first, journals original file contents before edits, and reports which files the task changed (with +/- lines) separately from changes you already had. Records live in `.forge/tasks/<id>/` (ignored by Git)
-- `forge tasks list | show | undo` — review a task's proof of work, and revert its changes only where provably safe (files untouched since the task; your pre-existing changes are never touched; no git reset/checkout)
-- `forge tools list | describe | run` — inspect and run tools directly, without a model
-- `forge run "task"` — the agent loop: model → tool calls → results back to the model → final answer, with a hard step limit (`--max-steps`)
-- Layered configuration (defaults, profile, user and project TOML files, environment, command line) with profiles and `forge config show | paths`
-- A test suite run with `pytest` (no network or API key needed)
-
-### Planned
-
-Everything below is **not implemented yet**:
-
-- More providers (Anthropic, Gemini, DeepSeek, ...)
-- Streaming replies
-- MCP server support
-- Memory
-
-## Installation
-
-Requires **Python 3.12+** and Git.
-
-```bash
+```sh
 git clone https://github.com/jayspyroyale/forge-agent.git
 cd forge-agent
-
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS / Linux:
-source .venv/bin/activate
-
-pip install -e ".[dev]"
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+python -m pip install -e ".[dev]"
+forge doctor
 ```
 
-`-e` installs Forge in *editable* mode, so changes to the source code take effect without reinstalling. `[dev]` also installs the test tools.
+Set `OPENAI_API_KEY` for OpenAI, or run a local Ollama model:
 
-## CLI commands
-
-```bash
-forge                           # interactive session: type tasks, /help, /exit
-forge "Fix the failing tests"   # one task (same as: forge run "...")
-forge --help                    # show available commands
-forge --version                 # show the installed version
-forge doctor                    # check that your local environment is ready
-forge models list               # list model providers
-forge ask "Reply with exactly FORGE_OK"            # use the configured provider
-forge ask -p ollama -m llama3 "Explain recursion"  # choose provider and model
-forge ask -p fake "hello"       # offline test provider; prints "[fake] hello"
-forge tools list                # list built-in tools
-forge tools describe read_file  # show a tool's argument schema
-forge tools run read_file path=README.md max_lines=20
-forge run "Read README.md and summarize it"   # agent loop
-forge run --verbose "..."       # also show tool output; --debug shows everything
-forge tasks list                # recorded tasks; then: forge tasks show ID / forge tasks undo ID
+```sh
+forge run -p openai "Fix the tests"
+forge run -p ollama -m llama3 "Fix the tests"
+python -m forge.benchmarks.demo          # offline scripted models, real tools and verification
 ```
 
-`forge ask` options: `--provider/-p`, `--model/-m`, `--base-url`, `--debug` (show full tracebacks).
+The [offline demo](examples/exploration/README.md) prints three candidate plans, isolated edits, verification, estimated costs, comparison, selection, application and undo. The [broken calculator](examples/broken_calculator/README.md) also supports a normal run.
 
-You can also run Forge as a module: `python -m forge --help`.
+## Explore, compare and apply
 
-## Configuration
-
-Configuration is layered, lowest to highest priority:
-
+```sh
+forge explore --approaches 3 "Implement caching" --no-apply
+forge explorations show latest
+forge explorations show latest --candidate A --patch
+forge explorations compare latest
+forge explorations select latest A
+forge explorations apply latest
+forge tasks list
+forge tasks undo TASK_ID
 ```
-defaults → profile → user config → project config → environment (FORGE_*) → command line
-```
 
-- User config: `~/.forge/config.toml` (or `$FORGE_HOME/config.toml`)
-- Project config: `<project>/.forge/config.toml` (safe to commit; secrets are refused)
+The default assisted mode recommends an eligible candidate, asks you to choose, then asks before applying. `--mode manual` lets you choose. `--mode autonomous --apply` explicitly enables policy selection and application. Autonomous selection alone leaves your project unchanged. `--yes` approves tool actions classified “ask”; it never overrides a denial.
+
+Candidates use detached Git worktrees or separate copies for non-Git projects. Uncommitted changes are copied into the baseline; `--from-head` leaves them out. Merge/rebase operations, unresolved conflicts and repositories without commits are refused. Workspaces normally clean up after execution; `--keep` retains them. Every candidate's local evidence and patch remain available.
+
+Apply validates all touched-file baseline hashes and saved candidate content before writing. Later edits produce conflicts; unrelated files stay untouched. Originals are journaled, creating an inspectable, undoable task.
+
+## Configuration and policy
+
+Precedence: defaults → profile → user TOML → project TOML → `FORGE_*` environment → CLI.
+
+User config: `~/.forge/config.toml` (or `$FORGE_HOME/config.toml`). Project config: `.forge/config.toml`. Use `forge config show` and `forge config paths`. Profiles include cheap, balanced, production, maximum-quality and custom profiles.
 
 ```toml
-# .forge/config.toml
-profile = "production"          # cheap | balanced (default) | production | maximum-quality | your own
-
 [model]
-provider = "ollama"
-name = "llama3"
+provider = "openai"
+max_response_tokens = 4096
+# Supply actual prices to enable dollar-budget admission:
+# input_cost_per_million = 1.0
+# output_cost_per_million = 2.0
 
-[agent]
-max_steps = 25
-verification = "auto"           # run the project's checks after changes ("off" to skip)
-
-[permissions]                   # allow | ask | deny
+[permissions]
+read = "allow"
 write = "ask"
 execute = "ask"
 dangerous = "deny"
 
-[terminal]
-timeout = 120
-output_limit = 12000
+[exploration]
+approaches = 5
+adaptive = true
+selection_mode = "assisted"             # manual | assisted | autonomous
+review = "auto"                         # auto | always | never
+max_tokens = 100000
+max_elapsed_time = 300
+# max_api_cost = 0.50                   # requires configured prices
 
-[profiles.quick.agent]          # define your own profile
-max_steps = 8
+[exploration.weights]
+correctness = 50
+safety = 20
+cost = 10
+speed = 10
+simplicity = 10
+minimal_diff = 5
+maintainability = 0                     # optional model assessment
+scalability = 0                         # optional model assessment
+
+[exploration.constraints]
+tests_must_pass = true
+no_new_dependencies = true
+max_files_changed = 10
+# max_cost_usd = 0.50                   # unknown cost makes a candidate ineligible
+# security_checks_must_pass = true
 ```
 
-`forge config show` prints every effective value and where it came from; `forge config paths` shows which files are used. Use `forge --profile NAME ...` or `forge run --profile NAME ...` to switch profiles.
+Weights are finite, nonnegative and normalized. Hard constraints determine eligibility separately from scoring. A user can explicitly choose an ineligible candidate; the override is recorded. Autonomous selection never does.
 
-Environment variables:
+**MEASURED:** checks, file/line counts, dependencies, tokens, estimated cost, elapsed time, tool calls, retries and risk events, collected from Forge's actual records.
 
-| Variable | Setting |
-|----------|---------|
-| `FORGE_PROVIDER`, `FORGE_MODEL`, `FORGE_BASE_URL`, `FORGE_TEMPERATURE`, `FORGE_TIMEOUT` | `model.*` |
-| `FORGE_MAX_STEPS`, `FORGE_VERIFICATION` | `agent.*` |
-| `FORGE_DEBUG`, `FORGE_VERBOSE` | `ui.*` |
-| `FORGE_PROFILE` | `profile` |
+**MODEL-ASSESSMENT:** optional opinions on maintainability, readability, architectural fit and scalability. Stored and labelled separately, affecting only configured model-assessed factors. Model claims about passing tests never become verification evidence.
 
-**API keys are never stored in Forge's configuration.** Each provider reads its own key from the environment:
+## Adaptive and multi-model exploration
 
-- `openai`: `OPENAI_API_KEY`
-- `ollama`: none needed (runs locally)
-
-Do not commit keys. `.env` files are ignored by Git.
-
-### Using a local model with Ollama
-
-```bash
-ollama pull llama3
-forge ask -p ollama -m llama3 "Reply with exactly FORGE_OK"
+```sh
+forge explore --approaches 5 --adaptive --max-tokens 100000 --max-time 300 "Implement caching"
 ```
 
-Other OpenAI-compatible servers can be used with `-p openai --base-url <url>`.
+Adaptive runs start small and stop at the candidate limit, budget exhaustion, a strong verified candidate, an improvement plateau or cancellation. Planning, implementation and review share a call ledger. Conservative UTF-8 input reservations plus output caps are replaced by reported usage; missing usage retains an estimate. Costs remain unknown without reported prices or configured rates. Admission budgets cannot guarantee vendor tokenizers, hidden retries, billing or cancellation semantics.
 
-## Running tests
+```toml
+[exploration]
+strategy = "different_approaches"        # or same_approach
+model_assignment = "round_robin"        # automatic uses deterministic pool rotation
+experimental_generation = true
 
-```bash
-pytest            # all offline tests; no network, no API key
-pytest -m live    # optional tests against real providers
+[[exploration.model_pool]]
+provider = "openai"
+name = "model-a"
+
+[[exploration.model_pool]]
+provider = "ollama"
+name = "model-b"
+
+[exploration.candidate_models.C]         # explicit choice overrides the pool
+provider = "openai"
+name = "model-c"
 ```
 
-Live tests skip themselves unless their provider is configured: set `OPENAI_API_KEY` for OpenAI, or `FORGE_LIVE_OLLAMA_MODEL` (for example `llama3`) for Ollama.
+Later generations propose fresh plans informed by eligible parents' evidence. Parent IDs and generations are recorded; code is never blindly merged.
 
-## Roadmap
+## Models, tools and safety
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 1 | Project foundation, CLI, config, tests | ✅ Done |
-| 2 | Model-agnostic provider layer, first real provider, `forge ask` | ✅ Done |
-| 3 | Agent loop and core tools (read, search, edit, run) with permission checks | Planned |
-| 4 | MCP integration | Planned |
-| 5 | Memory and more providers | Planned |
+Built-in providers: OpenAI Chat Completions, Ollama through its compatible API, and an offline fake provider. Other compatible endpoints use `model.base_url` or normal run/ask's `--base-url`. Native Anthropic/Gemini adapters and streaming are not implemented.
 
-The roadmap will change as the project evolves.
-
-## Project structure
-
-```
-forge/
-├── __init__.py          # package version
-├── __main__.py          # enables `python -m forge`
-├── cli/                 # Typer + Rich: commands, live event rendering, reports, interactive session
-├── config/              # ForgeConfig schema, layered loader, profiles
-├── doctor.py            # local environment checks used by `forge doctor`
-├── models/
-│   ├── types.py         # Message, ToolCall, ToolDefinition, Usage, ModelResponse
-│   ├── base.py          # ModelProvider interface
-│   ├── errors.py        # Forge-level model errors
-│   ├── registry.py      # provider lookup by name; create_provider(config)
-│   └── providers/
-│       ├── fake.py              # offline provider for tests
-│       └── openai_provider.py   # OpenAI and Ollama adapters
-├── agent/               # (placeholder) agent loop, state, prompts
-├── tools/               # (placeholder) tool interface and registry
-└── security/            # (placeholder) permission decisions
-tests/                   # pytest test suite
-examples/                # broken_calculator: a tiny buggy project to try Forge on
+```sh
+forge models list
+forge ask -p fake "hello"
+forge tools list
+forge tools describe edit_file
+forge tools run read_file path=README.md max_lines=20
 ```
 
-Dependencies flow in one direction:
+Filesystem tools resolve paths/symlinks through Workspace and protect Git internals and records. Every model-requested tool, including MCP tools, uses ToolExecutor and PermissionEngine. Verification uses the same permissions. Default reads are allowed, writes/execution ask, dangerous actions are denied.
 
-- `cli` → `models`, `config`, `doctor`
-- `agent` → `models`, `tools`, `security`, `config`
-- `models` → `config`
+**Shell commands and MCP processes are not OS-sandboxed.** Classification is heuristic. Approved code runs with your account's privileges and can reach beyond a workspace. Worktrees separate working files, not hostile programs. Use a container/VM for untrusted code. Read [SECURITY.md](SECURITY.md).
 
-`tools` and `security` import nothing else from Forge. Only the files in `models/providers/` know about provider SDKs; everything else uses Forge's own types.
+## Context, memory, MCP and proof of work
 
-## Contributing
+Context items carry source references, order, importance, size and provenance. Deterministic budgeting compresses noisy old output and supersedes redundant observations while preserving instructions/current state. Filename/text retrieval finds relevant files without embeddings.
 
-Forge is at a very early stage, and the design is still settling. Issues and discussion are welcome.
+SQLite memory stores project-scoped instructions, architecture, decisions, facts, workflows and preferences with confidence, expiration, verification and conflict handling. Only relevant active memories enter context. Model memory writes are disabled by default.
 
-If you want to contribute code:
+```sh
+forge memory list
+forge memory inspect ID
+forge memory add instruction "Run unit tests after edits"
+forge memory forget ID
+```
 
-1. Fork the repository and create a branch.
-2. Install with `pip install -e ".[dev]"`.
-3. Make your change and add tests.
-4. Run `pytest` and make sure everything passes.
-5. Open a pull request describing what you changed and why.
+MCP supports stdio handshake, paginated discovery, namespaced tools, timeouts and disconnect handling. Configured risk determines permissions; a server cannot lower its own risk.
 
-Please keep changes small and readable; clarity is a core goal of the project.
+```toml
+[mcp.servers.example]
+command = "your-mcp-server"
+risk = "execute"
+env = { SERVICE_TOKEN = "${SERVICE_TOKEN}" }
+```
 
-## License
+```sh
+forge mcp list
+forge mcp tools
+forge mcp test example
+```
 
-Forge is released under the [MIT License](LICENSE).
+Configured servers are trusted executable programs; startup executes their command. Keep secrets in environment references, never committed config.
+
+Proof of work records tool outcomes, commands, changes and Forge-run checks as VERIFIED / FAILED / UNVERIFIED. Local records live under `.forge/tasks/` and `.forge/explorations/`. Originals retained for undo can contain private project content: protect records and inspect before sharing.
+
+## Benchmarks and contributing
+
+```sh
+forge benchmark list
+forge benchmark run fix_python_bug --approaches 3 --yes --output experiment.json
+forge benchmark run performance_improvement --normal --yes
+forge benchmark compare experiment.json another.json
+python -m pytest
+python -m compileall -q forge tests
+python -m ruff check forge tests
+python -m build
+```
+
+Five tasks cover Python/TypeScript bugs, feature addition, refactoring and an operation-count performance improvement. JSON exports record reproducibility metadata; model APIs remain nondeterministic. See [benchmarks](benchmarks/README.md).
+
+Read the [backend walkthrough](docs/ARCHITECTURE.md), [contribution guide](CONTRIBUTING.md) and [changelog](CHANGELOG.md). CI runs offline tests on Windows/Linux, compile/lint/coverage checks, wheel installation and the offline demo.
+
+Released under the [MIT License](LICENSE).

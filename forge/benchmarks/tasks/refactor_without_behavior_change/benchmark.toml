@@ -1,0 +1,7 @@
+name = "refactor_without_behavior_change"
+task = "Refactor total(items) for readability without changing its results or modifying verify.py."
+command = "{python} verify.py"
+[constraints]
+no_new_dependencies = true
+max_files_changed = 5
+

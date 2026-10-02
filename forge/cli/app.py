@@ -12,6 +12,7 @@ from typing import Annotated
 import typer
 
 from forge import __version__
+from forge.cli.commands.benchmark import benchmark_app
 from forge.cli.commands.config import config_app
 from forge.cli.commands.doctor import doctor
 from forge.cli.commands.explore import explore, explorations_app
@@ -67,6 +68,7 @@ app.add_typer(config_app, name="config")
 app.add_typer(memory_app, name="memory")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(explorations_app, name="explorations")
+app.add_typer(benchmark_app, name="benchmark")
 
 ROOT_OPTIONS = frozenset({"--help", "-h", "--version", "--install-completion", "--show-completion"})
 ROOT_VALUE_OPTIONS = frozenset({"--profile"})  # root options followed by a value

@@ -1,0 +1,7 @@
+name = "fix_python_bug"
+task = "Fix multiply so it returns the product, preserving the public API."
+command = "{python} verify.py"
+[constraints]
+no_new_dependencies = true
+max_files_changed = 5
+

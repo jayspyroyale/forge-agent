@@ -1,0 +1,7 @@
+name = "add_feature"
+task = "Implement median(values), including even-length inputs; reject an empty list with ValueError."
+command = "{python} verify.py"
+[constraints]
+no_new_dependencies = true
+max_files_changed = 5
+

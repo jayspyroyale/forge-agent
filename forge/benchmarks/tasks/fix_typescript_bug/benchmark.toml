@@ -1,0 +1,8 @@
+name = "fix_typescript_bug"
+task = "Fix multiply in app.ts without changing its signature or verify.ts."
+command = "node --experimental-strip-types verify.ts"
+requires = ["node"]
+[constraints]
+no_new_dependencies = true
+max_files_changed = 2
+
