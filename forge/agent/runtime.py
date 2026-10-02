@@ -6,6 +6,8 @@ exploration controller can call `run_task` once per candidate to get fully
 independent runtimes, each returning its own proof of work.
 """
 
+import asyncio
+import contextlib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from forge.context.items import BackgroundItem, Importance, Provenance, SourceTy
 from forge.context.retrieval import find_relevant_files, format_relevant_files
 from forge.evidence import TaskEvidence, build_evidence
 from forge.git.repo import GitRepository
+from forge.mcp.manager import McpManager, ServerStatus
 from forge.memory.facts import detect_project_facts
 from forge.memory.models import MemoryRecord
 from forge.memory.retrieval import format_memories, relevant_memories
@@ -176,19 +179,28 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
         store.save_checkpoint(task_id, snapshot)
         journal = store.journal(task_id)
 
-    memory, memories = _prepare_memory(config, workspace, task, agent_options.get("on_event"))
+    on_event = agent_options.get("on_event")
     extra_tools = list(agent_options.pop("extra_tools", ()))
-    if memory is not None and config.memory.model_writes:
-        extra_tools.append(RememberTool(memory, memory_project(config)))
-    try:
+    mcp_statuses: list[ServerStatus] = []
+    # Memory and MCP servers live exactly as long as the agent runs, even if it fails.
+    with contextlib.ExitStack() as resources:
+        memory, memories = _prepare_memory(config, workspace, task, on_event)
+        if memory is not None:
+            resources.callback(memory.close)
+            if config.memory.model_writes:
+                extra_tools.append(RememberTool(memory, memory_project(config)))
+        if any(server.enabled for server in config.mcp.servers.values()):
+            mcp = McpManager(config.mcp, workspace.root)
+            resources.callback(mcp.close)
+            mcp_statuses = await asyncio.to_thread(mcp.connect_all)
+            _report_mcp(mcp_statuses, on_event)
+            extra_tools += mcp.tools()
+
         agent = create_agent(
             config, before_write=journal.before_write if journal else None, extra_tools=extra_tools, **agent_options
         )
         background = gather_background(config, workspace, task, memories)
         state = await agent.run(task, task_id=task_id, background=background)
-    finally:
-        if memory is not None:
-            memory.close()
 
     changes = compute_changes(snapshot, workspace, repo, journal.pre_images() if journal else None)
     if changes.changes:
@@ -203,10 +215,26 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
     )
     if memories:
         evidence.extra["memories_used"] = [record.id for record in memories]
+    if mcp_statuses:
+        evidence.extra["mcp_servers"] = [
+            status.model_dump(include={"name", "connected", "error", "tools"}) for status in mcp_statuses
+        ]
     if store is not None:
         store.save_evidence(evidence)
         store.save_context(task_id, agent.context.manifest())
     return TaskOutcome(state=state, evidence=evidence)
+
+
+def _report_mcp(statuses: list[ServerStatus], on_event: EventHandler | None) -> None:
+    if on_event is None:
+        return
+    for status in statuses:
+        if not status.connected:
+            on_event(Notice(level="warning", message=f"MCP server '{status.name}' is unavailable: {status.error}"))
+            continue
+        on_event(Notice(message=f"MCP server '{status.name}': {len(status.tools)} tool(s)"))
+        for skipped in status.skipped:
+            on_event(Notice(level="warning", message=f"MCP tool '{status.name}.{skipped.name}' skipped: {skipped.reason}"))
 
 
 def _prepare_memory(

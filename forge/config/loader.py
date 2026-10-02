@@ -23,6 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 from forge.config.profiles import BUILTIN_PROFILES, DEFAULT_PROFILE
 from forge.config.schema import LEGACY_KEYS, ForgeConfig
+from forge.security.secret_scan import find_secrets
 
 # Environment variable -> dotted config key.
 ENV_KEYS: dict[str, str] = {
@@ -42,6 +43,7 @@ ENV_VARS: dict[str, str] = {key: env for env, key in ENV_KEYS.items()}
 
 # "token" only as a whole name or suffix (auth_token, GITHUB_TOKEN), so settings like max_tokens are not secrets.
 SECRET_KEY = re.compile(r"(api_?key|(^|_)token$|secret|password|passwd|credential)", re.IGNORECASE)
+ENV_REFERENCE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
 _URL_USERINFO = re.compile(r"(?<=://)[^/@\s]+@")
 
 
@@ -164,11 +166,16 @@ def flatten(data: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
     return flat
 
 
+def is_env_reference(value: Any) -> bool:
+    """True for values like "${GITHUB_TOKEN}": a pointer to a secret, not the secret itself."""
+    return isinstance(value, str) and bool(ENV_REFERENCE.fullmatch(value.strip()))
+
+
 def redact(key: str, value: Any) -> Any:
     """Hide anything that looks secret: secret-named keys, and credentials inside URLs."""
     if value is None:
         return None
-    if SECRET_KEY.search(key.split(".")[-1]):
+    if SECRET_KEY.search(key.split(".")[-1]) and not is_env_reference(value):
         return "***"
     if isinstance(value, str):
         return _URL_USERINFO.sub("***@", value)
@@ -185,7 +192,13 @@ def _read_toml(path: Path, layer: str) -> dict[str, Any]:
         raise ConfigError(f"{path}: invalid TOML: {error}") from None
     except (OSError, UnicodeDecodeError) as error:
         raise ConfigError(f"{path}: cannot be read: {error}") from None
-    secrets = [key for key in flatten(data) if SECRET_KEY.search(key.split(".")[-1])]
+    secrets = [
+        key
+        for key, value in flatten(data).items()
+        if (SECRET_KEY.search(key.split(".")[-1]) and not is_env_reference(value))
+        # Credentials inside URLs are allowed in files and redacted whenever they are shown.
+        or (isinstance(value, str) and set(find_secrets(value)) - {"credentials in URL"})
+    ]
     if secrets:
         where = "project config (it may be committed to Git)" if layer == "project" else "config files"
         raise ConfigError(

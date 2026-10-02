@@ -8,8 +8,10 @@ The file is named `openai_provider.py`, not `openai.py`, so that it is never
 confused with the `openai` package it imports.
 """
 
+import hashlib
 import json
 import os
+import re
 from typing import Any
 
 import openai
@@ -77,6 +79,7 @@ class OpenAIProvider(ModelProvider):
             "model": self.model,
             "messages": [_to_openai_message(message) for message in messages],
         }
+        names = {wire_tool_name(tool.name): tool.name for tool in tools or []}
         if tools:
             request["tools"] = [_to_openai_tool(tool) for tool in tools]
         if self.config.model.temperature is not None:
@@ -100,7 +103,7 @@ class OpenAIProvider(ModelProvider):
                 f"'{self.name}' returned HTTP {error.status_code}: {_short_message(error)}"
             ) from error
 
-        return _from_openai_completion(completion)
+        return _from_openai_completion(completion, names)
 
 
 class OllamaProvider(OpenAIProvider):
@@ -120,6 +123,24 @@ class OllamaProvider(OpenAIProvider):
 
 # --- Forge -> OpenAI ---------------------------------------------------------
 
+_WIRE_NAME = re.compile(r"[^A-Za-z0-9_-]")
+MAX_TOOL_NAME = 64
+
+
+def wire_tool_name(name: str) -> str:
+    """A Forge tool name in the character set every OpenAI-compatible API accepts.
+
+    Forge namespaces MCP tools with a dot (`github.create_issue`); function
+    names here may only use letters, digits, `_` and `-`. Dots become `__`;
+    anything else becomes `_`; very long names are shortened with a hash so
+    they stay unique. Replies are mapped back to Forge names.
+    """
+    wire = _WIRE_NAME.sub("_", name.replace(".", "__"))
+    if len(wire) > MAX_TOOL_NAME:
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+        wire = f"{wire[: MAX_TOOL_NAME - 9]}_{digest}"
+    return wire
+
 
 def _to_openai_message(message: Message) -> dict[str, Any]:
     result: dict[str, Any] = {"role": message.role, "content": message.content}
@@ -128,7 +149,7 @@ def _to_openai_message(message: Message) -> dict[str, Any]:
             {
                 "id": call.id,
                 "type": "function",
-                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+                "function": {"name": wire_tool_name(call.name), "arguments": json.dumps(call.arguments)},
             }
             for call in message.tool_calls
         ]
@@ -141,7 +162,7 @@ def _to_openai_tool(tool: ToolDefinition) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
-            "name": tool.name,
+            "name": wire_tool_name(tool.name),
             "description": tool.description,
             "parameters": tool.parameters,
         },
@@ -151,7 +172,7 @@ def _to_openai_tool(tool: ToolDefinition) -> dict[str, Any]:
 # --- OpenAI -> Forge ---------------------------------------------------------
 
 
-def _from_openai_completion(completion: Any) -> ModelResponse:
+def _from_openai_completion(completion: Any, names: dict[str, str] | None = None) -> ModelResponse:
     if not completion.choices:
         raise InvalidModelResponseError("The model returned no choices.")
     choice = completion.choices[0]
@@ -163,7 +184,7 @@ def _from_openai_completion(completion: Any) -> ModelResponse:
         tool_calls.append(
             ToolCall(
                 id=raw_call.id,
-                name=raw_call.function.name,
+                name=(names or {}).get(raw_call.function.name, raw_call.function.name),
                 arguments=_parse_arguments(raw_call.function.arguments),
             )
         )

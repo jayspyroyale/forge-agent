@@ -5,6 +5,7 @@ instead of silently ignored. No section has a field for secrets: API keys are
 read from environment variables by the provider that needs them.
 """
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -74,6 +75,43 @@ class MemorySettings(Section):
     model_writes: bool = False  # give the agent a `remember` tool (needs approval; stored as low confidence)
 
 
+RiskName = Literal["read", "write", "execute", "dangerous"]
+
+
+class McpServerSettings(Section):
+    """One MCP server Forge starts and talks to over stdio.
+
+    Secrets never go here: `env` values can reference your environment as
+    "${NAME}", and Forge fills them in when it starts the server.
+    """
+
+    command: str = Field(min_length=1)
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    cwd: str | None = None  # relative to the workspace; None: the workspace root
+    enabled: bool = True
+    startup_timeout: float = Field(default=15.0, gt=0)
+    timeout: float = Field(default=30.0, gt=0)  # seconds per tool call
+    # How risky this server's tools are for the permission engine. External tools are
+    # treated as running programs unless you say otherwise; servers cannot lower this.
+    risk: RiskName = "execute"
+    tool_risk: dict[str, RiskName] = Field(default_factory=dict)  # per tool, overrides `risk`
+    tools: list[str] | None = None  # only expose these tools (None: all)
+
+
+class McpSettings(Section):
+    servers: dict[str, McpServerSettings] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_names(self) -> "McpSettings":
+        for name in self.servers:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", name):
+                raise ValueError(
+                    f"MCP server name '{name}' must start with a letter and use only letters, digits, '_' or '-' (max 32)"
+                )
+        return self
+
+
 class UISettings(Section):
     verbose: bool = False
     debug: bool = False
@@ -123,6 +161,7 @@ class ForgeConfig(Section):
     terminal: TerminalSettings = Field(default_factory=TerminalSettings)
     context: ContextSettings = Field(default_factory=ContextSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    mcp: McpSettings = Field(default_factory=McpSettings)
     ui: UISettings = Field(default_factory=UISettings)
     exploration: ExplorationSettings = Field(default_factory=ExplorationSettings)
 
