@@ -40,6 +40,9 @@ Eventually, an AI model running inside Forge should be able to:
   - `openai` — OpenAI Chat Completions API
   - `ollama` — local models through Ollama's OpenAI-compatible API
   - `fake` — offline provider for tests
+- Tool system: tool interface, registry, executor, and neutral JSON-Schema tool definitions
+- Read-only built-in tools: `current_directory`, `list_files`, `read_file`, `file_exists`, `search_text`, all confined to the workspace (no `..` or symlink escapes)
+- `forge tools list | describe | run` — inspect and run tools directly, without a model
 - Configuration through `FORGE_*` environment variables
 - A test suite run with `pytest` (no network or API key needed)
 
@@ -48,7 +51,7 @@ Eventually, an AI model running inside Forge should be able to:
 Everything below is **not implemented yet**:
 
 - Agent loop that coordinates the model and tools
-- Built-in tools: read/edit files, search, run commands
+- Tools that modify files or run commands
 - Permission system with user approval prompts
 - More providers (Anthropic, Gemini, DeepSeek, ...)
 - Streaming replies
@@ -85,6 +88,9 @@ forge models list               # list model providers
 forge ask "Reply with exactly FORGE_OK"            # use the configured provider
 forge ask -p ollama -m llama3 "Explain recursion"  # choose provider and model
 forge ask -p fake "hello"       # offline test provider; prints "[fake] hello"
+forge tools list                # list built-in tools
+forge tools describe read_file  # show a tool's argument schema
+forge tools run read_file path=README.md max_lines=20
 ```
 
 `forge ask` options: `--provider/-p`, `--model/-m`, `--base-url`, `--debug` (show full tracebacks).

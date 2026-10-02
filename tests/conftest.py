@@ -18,3 +18,18 @@ def isolated_environment(request, monkeypatch):
         return
     for name in [*ENV_VARS.values(), *_PROVIDER_KEY_VARS]:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def workspace_root(tmp_path):
+    """A workspace directory with a sibling file outside it:
+
+    tmp_path/
+        workspace/allowed.txt
+        outside.txt
+    """
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "allowed.txt").write_text("hello from inside\n", encoding="utf-8")
+    (tmp_path / "outside.txt").write_text("secret from outside\n", encoding="utf-8")
+    return root

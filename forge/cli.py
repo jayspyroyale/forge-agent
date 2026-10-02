@@ -6,7 +6,9 @@ the logic testable on its own.
 """
 
 import asyncio
-from typing import Annotated
+import json
+from pathlib import Path
+from typing import Annotated, Any
 
 import typer
 from pydantic import ValidationError
@@ -19,7 +21,12 @@ from forge.config import ForgeConfig
 from forge.doctor import run_all_checks
 from forge.models.errors import ModelError
 from forge.models.registry import create_provider, default_registry
-from forge.models.types import Message
+from forge.models.types import Message, ToolCall
+from forge.tools.base import ToolContext
+from forge.tools.builtin import create_default_tools
+from forge.tools.executor import ToolExecutor
+from forge.tools.registry import ToolNotFoundError
+from forge.workspace import Workspace, WorkspaceError
 
 app = typer.Typer(
     help="Forge: a lightweight, model-agnostic runtime for AI coding agents.",
@@ -27,6 +34,8 @@ app = typer.Typer(
 )
 models_app = typer.Typer(help="Inspect available model providers.", no_args_is_help=True)
 app.add_typer(models_app, name="models")
+tools_app = typer.Typer(help="Inspect and run Forge tools directly, without a model.", no_args_is_help=True)
+app.add_typer(tools_app, name="tools")
 
 console = Console()
 error_console = Console(stderr=True)
@@ -126,9 +135,89 @@ def ask(
         error_console.print(f"[red]Error:[/red] {escape(str(error))}")
         raise typer.Exit(code=1)
 
-    console.print(response.content, markup=False, highlight=False)
+    console.print(response.content, markup=False, highlight=False, soft_wrap=True)
 
     footer = f"{config.provider} · {response.model or model_provider.model}"
     if response.usage is not None:
         footer += f" · {response.usage.total_tokens} tokens"
     console.print(f"[dim]{escape(footer)}[/dim]")
+
+
+@tools_app.command("list")
+def list_tools() -> None:
+    """List the built-in tools."""
+    table = Table(title="Tools")
+    table.add_column("Name", style="bold")
+    table.add_column("Description")
+    for tool in create_default_tools().list_tools():
+        table.add_row(tool.name, tool.description)
+    console.print(table)
+
+
+@tools_app.command("describe")
+def describe_tool(name: Annotated[str, typer.Argument(help="Tool name.")]) -> None:
+    """Show a tool's description and argument schema."""
+    try:
+        tool = create_default_tools().get(name)
+    except ToolNotFoundError as error:
+        error_console.print(f"[red]Error:[/red] {escape(str(error))}")
+        raise typer.Exit(code=1)
+    definition = tool.definition()
+    console.print(f"[bold]{escape(definition.name)}[/bold]")
+    console.print(escape(definition.description))
+    console.print_json(json.dumps(definition.parameters))
+
+
+@tools_app.command("run")
+def run_tool(
+    name: Annotated[str, typer.Argument(help="Tool name.")],
+    arguments: Annotated[
+        list[str] | None, typer.Argument(help="Arguments as key=value pairs, e.g. path=README.md.")
+    ] = None,
+    json_arguments: Annotated[
+        str | None, typer.Option("--json", help="Arguments as a JSON object.")
+    ] = None,
+    workspace: Annotated[
+        Path | None, typer.Option("--workspace", "-w", help="Workspace root (default: current directory).")
+    ] = None,
+) -> None:
+    """Run one tool directly and print its result."""
+    try:
+        parsed = _parse_tool_arguments(arguments or [], json_arguments)
+        context = ToolContext(workspace=Workspace(workspace or Path.cwd()))
+    except (ValueError, WorkspaceError) as error:
+        error_console.print(f"[red]Error:[/red] {escape(str(error))}")
+        raise typer.Exit(code=2)
+
+    executor = ToolExecutor(create_default_tools(), context)
+    result = asyncio.run(executor.execute(ToolCall(id="cli", name=name, arguments=parsed)))
+
+    if result.success:
+        console.print(result.output, markup=False, highlight=False, soft_wrap=True)
+    else:
+        if result.output:
+            console.print(result.output, markup=False, highlight=False, soft_wrap=True)
+        error_console.print(f"[red]Error:[/red] {escape(result.error or 'unknown error')}")
+        raise typer.Exit(code=1)
+
+
+def _parse_tool_arguments(pairs: list[str], json_arguments: str | None) -> dict[str, Any]:
+    """Merge --json and key=value arguments. Values that parse as JSON (numbers, true) are converted."""
+    parsed: dict[str, Any] = {}
+    if json_arguments:
+        try:
+            loaded = json.loads(json_arguments)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"--json is not valid JSON: {error}") from None
+        if not isinstance(loaded, dict):
+            raise ValueError("--json must be a JSON object")
+        parsed.update(loaded)
+    for pair in pairs:
+        key, separator, raw_value = pair.partition("=")
+        if not separator or not key:
+            raise ValueError(f"Expected key=value, got '{pair}'")
+        try:
+            parsed[key] = json.loads(raw_value)
+        except json.JSONDecodeError:
+            parsed[key] = raw_value
+    return parsed

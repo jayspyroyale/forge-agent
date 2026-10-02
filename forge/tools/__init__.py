@@ -1,1 +1,1 @@
-"""Tool interface and registry. Real tools arrive in a later phase."""
+"""The tool system: tool interface, registry, executor, and built-in tools."""

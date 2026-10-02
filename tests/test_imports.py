@@ -1,30 +1,26 @@
 import importlib
+import pkgutil
 
 import pytest
 
-MODULES = [
-    "forge",
-    "forge.cli",
-    "forge.config",
-    "forge.doctor",
-    "forge.agent",
-    "forge.agent.loop",
-    "forge.agent.state",
-    "forge.agent.prompts",
-    "forge.models",
-    "forge.models.base",
-    "forge.models.errors",
-    "forge.models.types",
-    "forge.models.registry",
-    "forge.models.providers",
-    "forge.models.providers.fake",
-    "forge.models.providers.openai_provider",
-    "forge.tools",
-    "forge.tools.base",
-    "forge.tools.registry",
-    "forge.security",
-    "forge.security.permissions",
-]
+import forge
+
+
+def all_forge_modules() -> list[str]:
+    """Every module in the forge package, discovered automatically."""
+    names = ["forge"]
+    for module in pkgutil.walk_packages(forge.__path__, prefix="forge."):
+        if module.name != "forge.__main__":
+            names.append(module.name)
+    return sorted(names)
+
+
+MODULES = all_forge_modules()
+
+
+def test_expected_modules_are_discovered():
+    for name in ["forge.cli", "forge.config", "forge.models.registry", "forge.tools.executor"]:
+        assert name in MODULES
 
 
 @pytest.mark.parametrize("module_name", MODULES)
@@ -33,7 +29,5 @@ def test_module_imports(module_name):
 
 
 def test_version_is_a_string():
-    import forge
-
     assert isinstance(forge.__version__, str)
     assert forge.__version__
