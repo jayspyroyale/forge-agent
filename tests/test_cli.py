@@ -72,3 +72,66 @@ def test_ask_with_invalid_environment_value(monkeypatch):
     result = runner.invoke(app, ["ask", "--provider", "fake", "hello"])
     assert result.exit_code == 1
     assert "Invalid configuration" in result.output
+
+
+# --- forge run ----------------------------------------------------------------
+
+
+def _script_provider(monkeypatch, responses):
+    """Make `forge run` use a scripted fake provider instead of the configured one."""
+    from forge.models.providers.fake import FakeModelProvider
+
+    monkeypatch.setattr(
+        "forge.agent.runtime.create_provider",
+        lambda config: FakeModelProvider(config, responses=list(responses)),
+    )
+
+
+def test_run_with_fake_provider_echo(workspace_root, monkeypatch):
+    monkeypatch.chdir(workspace_root)
+    result = runner.invoke(app, ["run", "-p", "fake", "hello agent"])
+    assert result.exit_code == 0
+    assert "[fake] hello agent" in result.output
+    assert "Completed" in result.output
+
+
+def test_run_with_scripted_tool_call(workspace_root, monkeypatch):
+    from forge.models.types import ModelResponse, ToolCall
+
+    monkeypatch.chdir(workspace_root)
+    _script_provider(
+        monkeypatch,
+        [
+            ModelResponse(tool_calls=[ToolCall(id="c1", name="read_file", arguments={"path": "allowed.txt"})]),
+            "allowed.txt says hello.",
+        ],
+    )
+
+    result = runner.invoke(app, ["run", "Read allowed.txt"])
+
+    assert result.exit_code == 0
+    assert "read_file" in result.output
+    assert "allowed.txt says hello." in result.output
+    assert "Completed in 2 steps" in result.output
+
+
+def test_run_reports_max_steps(workspace_root, monkeypatch):
+    from forge.models.types import ModelResponse, ToolCall
+
+    monkeypatch.chdir(workspace_root)
+    _script_provider(
+        monkeypatch,
+        [ModelResponse(tool_calls=[ToolCall(id=f"c{n}", name="list_files")]) for n in range(5)],
+    )
+
+    result = runner.invoke(app, ["run", "--max-steps", "2", "loop"])
+
+    assert result.exit_code == 1
+    assert "max_steps" in result.output
+
+
+def test_run_without_api_key_shows_clear_error(workspace_root, monkeypatch):
+    monkeypatch.chdir(workspace_root)
+    result = runner.invoke(app, ["run", "task"])
+    assert result.exit_code == 1
+    assert "OPENAI_API_KEY" in result.output

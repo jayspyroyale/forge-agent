@@ -17,6 +17,9 @@ from rich.markup import escape
 from rich.table import Table
 
 from forge import __version__
+from forge.agent.events import AgentEvent, ToolFinished, ToolStarted
+from forge.agent.runtime import create_agent
+from forge.agent.state import AgentStatus
 from forge.config import ForgeConfig
 from forge.doctor import run_all_checks
 from forge.models.errors import ModelError
@@ -221,3 +224,58 @@ def _parse_tool_arguments(pairs: list[str], json_arguments: str | None) -> dict[
         except json.JSONDecodeError:
             parsed[key] = raw_value
     return parsed
+
+
+@app.command()
+def run(
+    task: Annotated[str, typer.Argument(help="What you want the agent to do.")],
+    provider: Annotated[
+        str | None, typer.Option("--provider", "-p", help="Provider name (see `forge models list`).")
+    ] = None,
+    model: Annotated[str | None, typer.Option("--model", "-m", help="Model name.")] = None,
+    max_steps: Annotated[
+        int | None, typer.Option("--max-steps", help="Maximum number of model calls.")
+    ] = None,
+    debug: Annotated[
+        bool | None, typer.Option("--debug", help="Show full error tracebacks.")
+    ] = None,
+) -> None:
+    """Run the agent on a task in the current directory."""
+    try:
+        config = ForgeConfig.from_env(provider=provider, model=model, max_steps=max_steps, debug=debug)
+    except ValidationError as error:
+        error_console.print(f"[red]Invalid configuration:[/red] {escape(str(error))}")
+        raise typer.Exit(code=1)
+
+    try:
+        agent = create_agent(config, on_event=_print_event)
+        state = asyncio.run(agent.run(task))
+    except (ModelError, WorkspaceError) as error:
+        if config.debug:
+            error_console.print_exception()
+        error_console.print(f"[red]Error:[/red] {escape(str(error))}")
+        raise typer.Exit(code=1)
+
+    if state.final_answer:
+        console.print()
+        console.print(state.final_answer, markup=False, highlight=False, soft_wrap=True)
+    console.print()
+    if state.status == AgentStatus.COMPLETED:
+        steps = "1 step" if state.step == 1 else f"{state.step} steps"
+        console.print(f"[green]Completed[/green] [dim]in {steps}[/dim]")
+    else:
+        error_console.print(f"[red]Stopped ({state.status}):[/red] {escape(state.error or '')}")
+        raise typer.Exit(code=1)
+
+
+def _print_event(event: AgentEvent) -> None:
+    if isinstance(event, ToolStarted):
+        arguments = escape(_short_json(event.call.arguments))
+        console.print(f"[cyan]→ {escape(event.call.name)}[/cyan] [dim]{arguments}[/dim]")
+    elif isinstance(event, ToolFinished) and not event.result.success:
+        console.print(f"  [red]✗ {escape(event.result.error or 'failed')}[/red]")
+
+
+def _short_json(value: Any, limit: int = 100) -> str:
+    text = json.dumps(value, ensure_ascii=False)
+    return text if len(text) <= limit else text[: limit - 3] + "..."

@@ -1,1 +1,1 @@
-"""The agent layer: coordinates models and tools. Placeholder in Phase 1."""
+"""The agent layer: the model/tool loop, its state, events, and prompts."""

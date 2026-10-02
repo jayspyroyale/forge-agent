@@ -38,7 +38,8 @@ class FakeModelProvider(ModelProvider):
         tools: list[ToolDefinition] | None = None,
         **options: Any,
     ) -> ModelResponse:
-        self.calls.append({"messages": messages, "tools": tools, "options": options})
+        # Copy the list: callers keep appending to theirs after this call returns.
+        self.calls.append({"messages": list(messages), "tools": tools, "options": options})
 
         if self._scripted:
             if not self._responses:

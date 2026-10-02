@@ -74,6 +74,18 @@ class Usage(BaseModel):
             self.total_tokens = self.input_tokens + self.output_tokens
         return self
 
+    def __add__(self, other: "Usage") -> "Usage":
+        """Combine usage from several calls. Cost stays unknown unless both sides know it."""
+        cost = None
+        if self.cost_usd is not None and other.cost_usd is not None:
+            cost = self.cost_usd + other.cost_usd
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            total_tokens=(self.total_tokens or 0) + (other.total_tokens or 0),
+            cost_usd=cost,
+        )
+
 
 class ModelResponse(BaseModel):
     """A model's reply, in the same shape no matter which provider produced it."""

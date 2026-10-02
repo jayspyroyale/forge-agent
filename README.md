@@ -2,7 +2,7 @@
 
 Forge is a lightweight, model-agnostic runtime for building AI agents that can safely interact with software projects.
 
-> **Status: very early development (v0.2).** Forge can send a prompt to a model through a provider-independent interface. It does **not** run AI agents yet: there is no agent loop and no tools.
+> **Status: early development.** Forge can run an agent loop: a model reads your project through workspace-confined tools and answers. Editing, command execution, and permissions are being added phase by phase.
 
 ## What is Forge?
 
@@ -43,6 +43,7 @@ Eventually, an AI model running inside Forge should be able to:
 - Tool system: tool interface, registry, executor, and neutral JSON-Schema tool definitions
 - Read-only built-in tools: `current_directory`, `list_files`, `read_file`, `file_exists`, `search_text`, all confined to the workspace (no `..` or symlink escapes)
 - `forge tools list | describe | run` — inspect and run tools directly, without a model
+- `forge run "task"` — the agent loop: model → tool calls → results back to the model → final answer, with a hard step limit (`--max-steps`)
 - Configuration through `FORGE_*` environment variables
 - A test suite run with `pytest` (no network or API key needed)
 
@@ -50,7 +51,6 @@ Eventually, an AI model running inside Forge should be able to:
 
 Everything below is **not implemented yet**:
 
-- Agent loop that coordinates the model and tools
 - Tools that modify files or run commands
 - Permission system with user approval prompts
 - More providers (Anthropic, Gemini, DeepSeek, ...)
@@ -91,6 +91,7 @@ forge ask -p fake "hello"       # offline test provider; prints "[fake] hello"
 forge tools list                # list built-in tools
 forge tools describe read_file  # show a tool's argument schema
 forge tools run read_file path=README.md max_lines=20
+forge run "Read README.md and summarize it"   # agent loop
 ```
 
 `forge ask` options: `--provider/-p`, `--model/-m`, `--base-url`, `--debug` (show full tracebacks).
