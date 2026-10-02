@@ -299,15 +299,25 @@ def test_explore_cli(repo, tmp_path, monkeypatch):
     )
     runner = CliRunner()
 
-    result = runner.invoke(app, route(["explore", "-n", "2", "--yes", "Fix multiply"]))
+    # Assisted mode: accept the recommendation, then confirm applying it.
+    result = runner.invoke(app, route(["explore", "-n", "2", "--yes", "Fix multiply"]), input="y\ny\n")
 
     assert result.exit_code == 0, result.output
     output = result.output
     assert "Candidate plans" in output and "Direct fix" in output
     assert "Candidate A" in output and "Candidate B" in output
     assert "A: completed" in output and "tests PASS" in output
-    assert "Candidates (run" in output
-    run_id = ExplorationStore(Workspace(repo)).latest().run_id
+    assert "MEASURED" in output and "Recommended: Candidate A" in output
+    assert "B ineligible: changed nothing" in output
+    assert "Applied candidate A" in output
+    assert "return a * b" in (repo / "calculator.py").read_text()
+    run = ExplorationStore(Workspace(repo)).latest()
+    run_id = run.run_id
+    assert run.selection.candidate_id == "A" and run.applied.candidate_id == "A"
+
+    undo = runner.invoke(app, ["tasks", "undo", run.applied.task_id, "--yes"])
+    assert "Reverted 1 file(s)" in undo.output
+    assert BUG in (repo / "calculator.py").read_text()
 
     listed = runner.invoke(app, ["explorations", "list"])
     assert run_id in listed.output

@@ -11,6 +11,8 @@ wheels/
 
 # --- Virtual environments ---
 .venv/
+.venv-*/
+.test-tmp*/
 venv/
 env/
 

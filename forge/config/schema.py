@@ -15,7 +15,7 @@ from forge.security.policy import PermissionPolicy
 
 
 class Section(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class ModelSettings(Section):
@@ -118,10 +118,54 @@ class UISettings(Section):
 
 
 class SelectionWeights(Section):
-    correctness: float = Field(default=1.0, ge=0)
-    safety: float = Field(default=1.0, ge=0)
-    cost: float = Field(default=0.0, ge=0)
-    latency: float = Field(default=0.0, ge=0)
+    """How much each factor counts when Forge ranks candidates. Any scale; Forge normalizes them to sum to 1.
+
+    Measured factors: correctness, safety, cost, speed, simplicity, minimal_diff.
+    Model-assessed factors (only used when > 0, which asks a model to review the diffs):
+    maintainability, scalability.
+    """
+
+    correctness: float = Field(default=50, ge=0)
+    safety: float = Field(default=20, ge=0)
+    cost: float = Field(default=10, ge=0)
+    speed: float = Field(default=5, ge=0)
+    simplicity: float = Field(default=10, ge=0)
+    minimal_diff: float = Field(default=5, ge=0)
+    maintainability: float = Field(default=0, ge=0)
+    scalability: float = Field(default=0, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_latency(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "latency" in data:  # the Phase 12 name for speed
+            data = dict(data)
+            data.setdefault("speed", data.pop("latency"))
+        return data
+
+    @model_validator(mode="after")
+    def _not_all_zero(self) -> "SelectionWeights":
+        if sum(self.model_dump().values()) <= 0:
+            raise ValueError("at least one selection weight must be greater than 0")
+        return self
+
+    def normalized(self) -> dict[str, float]:
+        weights = self.model_dump()
+        total = sum(weights.values())
+        return {factor: value / total for factor, value in weights.items()}
+
+
+class SelectionConstraints(Section):
+    """Hard rules. A candidate that breaks one is ineligible, whatever its score."""
+
+    require_completed: bool = True  # the agent finished (no crash, step limit, or budget stop)
+    tests_must_pass: bool = True  # if the project has tests, Forge's own run of them passed
+    security_checks_must_pass: bool = False  # no dangerous actions attempted, and lint/typecheck did not fail
+    no_new_dependencies: bool = False
+    max_files_changed: int | None = Field(default=None, ge=0)
+    max_cost_usd: float | None = Field(default=None, ge=0)
+
+
+SELECTION_MODE_ALIASES = {"user": "manual", "recommend": "assisted", "auto": "autonomous"}
 
 
 class ExplorationSettings(Section):
@@ -131,8 +175,20 @@ class ExplorationSettings(Section):
     # Where candidate workspaces (Git worktrees or copies) are created. None: <FORGE_HOME>/worktrees.
     workspace_dir: Path | None = None
     budget_usd: float | None = Field(default=None, ge=0)
+    # manual: you choose; assisted: Forge recommends, you confirm; autonomous: Forge chooses by policy.
+    selection_mode: Literal["manual", "assisted", "autonomous"] = "assisted"
     weights: SelectionWeights = Field(default_factory=SelectionWeights)
-    selection_mode: Literal["user", "recommend", "auto"] = "user"
+    constraints: SelectionConstraints = Field(default_factory=SelectionConstraints)
+    # Ask a model to review the diffs (maintainability, scalability, ...). "auto": when those factors are weighted.
+    review: Literal["auto", "always", "never"] = "auto"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_old_mode_names(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("selection_mode") in SELECTION_MODE_ALIASES:
+            data = dict(data)
+            data["selection_mode"] = SELECTION_MODE_ALIASES[data["selection_mode"]]
+        return data
 
 
 # Phase 1-11 used flat keyword arguments. They still work when constructing a

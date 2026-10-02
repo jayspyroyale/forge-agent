@@ -29,7 +29,9 @@ from forge.agent.runtime import memory_project, run_task, workspace_from_config
 from forge.agent.state import new_task_id
 from forge.config import ForgeConfig
 from forge.config.loader import user_config_dir
-from forge.exploration.changes import compare, describe, manifest
+from forge.exploration.changes import compare as compare_files
+from forge.exploration.changes import describe, manifest
+from forge.exploration.compare import Comparison, compare
 from forge.exploration.dependencies import added_dependencies
 from forge.exploration.events import (
     CandidateFinished,
@@ -43,7 +45,8 @@ from forge.exploration.events import (
 from forge.exploration.isolation import ExplorationError, Isolation, preflight
 from forge.exploration.planner import ApproachPlanner, PlanningError, project_overview
 from forge.exploration.plans import ApproachPlan, candidate_brief
-from forge.exploration.results import CandidateResult, ExplorationRun, PermissionSummary
+from forge.exploration.results import CandidateResult, ExplorationRun, PermissionSummary, Selection
+from forge.exploration.review import review_candidates
 from forge.exploration.store import ExplorationStore
 from forge.models.base import ModelProvider
 from forge.models.registry import create_provider
@@ -110,6 +113,7 @@ class ExplorationController:
             self.store.save(run)
             for plan in plans:
                 await self._run_candidate(run, plan, isolation, keep_workspaces)
+            await self.evaluate(run)
             run.status = "completed"
         except PlanningError as error:
             run.status, run.error = "failed", str(error)
@@ -124,6 +128,29 @@ class ExplorationController:
             isolation.cleanup()
         self._emit(ExplorationFinished(run=run))
         return run
+
+    async def evaluate(self, run: ExplorationRun, review: bool | None = None) -> Comparison:
+        """Compare the candidates by the configured policy. A model review runs only when asked for or needed."""
+        settings = self.config.exploration
+        if review is None:
+            weighted = settings.weights.maintainability > 0 or settings.weights.scalability > 0
+            review = settings.review == "always" or (settings.review == "auto" and weighted)
+        assessments = []
+        if review:
+            patches = {c.candidate_id: self.store.patch(run.run_id, c.candidate_id) for c in run.candidates}
+            result = await review_candidates(self.provider_factory(self.config), run.task, run.candidates, patches)
+            assessments = result.assessments
+            if result.usage is not None:
+                run.review_usage = result.usage if run.review_usage is None else run.review_usage + result.usage
+            if result.note:
+                run.notes.append(result.note)
+        run.comparison = compare(run.candidates, settings.weights, settings.constraints, assessments)
+        self.store.save(run)
+        return run.comparison
+
+    def record_selection(self, run: ExplorationRun, selection: Selection) -> None:
+        run.selection = selection
+        self.store.save(run)
 
     # --- steps ----------------------------------------------------------------------------
 
@@ -178,7 +205,7 @@ class ExplorationController:
             on_event=handler,
         )
 
-        deltas, patch = describe(compare(before, root), root, isolation.baseline_content)
+        deltas, patch = describe(compare_files(before, root), root, isolation.baseline_content)
         for delta in deltas:
             if delta.final_hash is not None:
                 self.store.save_candidate_file(run.run_id, plan.id, delta.path, (root / delta.path).read_bytes())

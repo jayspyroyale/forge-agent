@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from forge.evidence import TaskEvidence
 from forge.exploration.changes import FileDelta
+from forge.exploration.compare import Comparison
 from forge.exploration.isolation import Baseline
 from forge.exploration.plans import ApproachPlan
 from forge.models.types import Usage
@@ -73,6 +74,23 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+class Selection(BaseModel):
+    candidate_id: str | None  # None: nothing selected (declined, or no eligible candidate)
+    mode: Literal["manual", "assisted", "autonomous"]
+    decided_by: Literal["user", "policy"]
+    recommended: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    tradeoffs: list[str] = Field(default_factory=list)
+    at: datetime = Field(default_factory=_now)
+
+
+class AppliedRecord(BaseModel):
+    candidate_id: str
+    task_id: str  # the task record created by applying; `forge tasks undo <task_id>` reverts it
+    files: list[str]
+    at: datetime = Field(default_factory=_now)
+
+
 class ExplorationRun(BaseModel):
     run_id: str
     task: str
@@ -82,9 +100,20 @@ class ExplorationRun(BaseModel):
     baseline: Baseline
     plans: list[ApproachPlan] = Field(default_factory=list)
     planning_usage: Usage | None = None
+    review_usage: Usage | None = None
     candidates: list[CandidateResult] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     error: str | None = None
+    comparison: Comparison | None = None
+    selection: Selection | None = None
+    applied: AppliedRecord | None = None
+
+    @property
+    def final_evidence(self) -> TaskEvidence | None:
+        """The selected candidate's proof of work: the evidence for the task as a whole."""
+        if self.selection is None or self.selection.candidate_id is None:
+            return None
+        return self.candidate(self.selection.candidate_id).evidence
 
     def candidate(self, candidate_id: str) -> CandidateResult:
         for result in self.candidates:

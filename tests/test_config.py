@@ -250,7 +250,7 @@ def test_maximum_quality_profile_sets_future_exploration_settings(layers):
     _, _, project = layers
     config = load_config(workspace=project, cli={"profile": "maximum-quality"}).config
     assert config.exploration.approaches == 3
-    assert config.exploration.selection_mode == "recommend"
+    assert config.exploration.selection_mode == "assisted"  # "recommend" is still accepted as an alias
     assert config.agent.verification_attempts == 5
 
 

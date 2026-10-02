@@ -59,7 +59,7 @@ class ExplorationRenderer:
                 start += f" + your {plural(event.uncommitted, 'uncommitted file')} (copied; your files are never modified)"
         else:
             start = "a copy of the project (not a Git repository)"
-        self.console.print(f"[dim]Run {event.run_id} · up to {plural(event.approaches, 'approach', )} · starting from {start}[/dim]")
+        self.console.print(f"[dim]Run {event.run_id} · up to {event.approaches} approach{'es' if event.approaches != 1 else ''} · starting from {start}[/dim]")
         if event.left_out:
             self.console.print(f"[yellow]! {plural(event.left_out, 'uncommitted file')} left out (--from-head): candidates do not see them[/yellow]")
 
@@ -112,23 +112,75 @@ def candidate_line(result: CandidateResult) -> str:
     return " · ".join(parts)
 
 
-def results_table(run: ExplorationRun) -> Table:
-    table = Table(title=f"Candidates (run {run.run_id})")
-    for column in ("ID", "Approach", "Status", "Tests", "Build", "Lint", "Types", "Files", "Diff", "New deps", "Tokens", "Cost", "Time"):
-        table.add_column(column, overflow="fold")
-    for result in run.candidates:
-        color, _ = _STATUS.get(result.status, ("red", "?"))
-        checks = result.checks
-        table.add_row(
-            result.candidate_id,
-            escape(result.plan.title),
-            f"[{color}]{result.status.replace('_', ' ')}[/{color}]",
-            *(_CHECK.get(checks.get(kind, ""), "-") for kind in ("test", "build", "lint", "typecheck")),
-            str(result.files_changed),
-            f"+{result.additions} -{result.deletions}",
-            escape(", ".join(result.dependencies_added) or "-"),
-            f"{result.total_tokens:,}" if result.total_tokens is not None else "-",
-            f"${result.cost_usd:.4f}" if result.cost_usd is not None else "-",
-            f"{result.duration_seconds:.1f}s",
+def show_candidates(console: Console, run: ExplorationRun) -> None:
+    """One card per candidate. Without a comparison (an interrupted run), the raw results."""
+    if run.comparison is None:
+        for result in run.candidates:
+            console.print(f"  {candidate_line(result)}")
+        return
+    titles = {result.candidate_id: result.plan.title for result in run.candidates}
+    for item in run.comparison.measured:
+        score = run.comparison.score(item.candidate_id)
+        color, mark = _STATUS.get(item.status, ("red", "?"))
+        verdict = f"score {score.total:.2f}" if score.eligible else "[red]ineligible[/red]"
+        recommended = " [bold green]← recommended[/bold green]" if item.candidate_id == run.comparison.recommended else ""
+        console.print(
+            f"[bold]Candidate {item.candidate_id}[/bold] {escape(titles.get(item.candidate_id, ''))} "
+            f"[{color}]{mark} {item.status.replace('_', ' ')}[/{color}] · {verdict}{recommended}"
         )
-    return table
+        checks = "   ".join(
+            f"{label}: {_CHECK.get(item.checks.get(kind, ''), '-')}"
+            for kind, label in (("test", "Tests"), ("build", "Build"), ("lint", "Lint"), ("typecheck", "Types"))
+        )
+        console.print(f"  {checks}")
+        risk = "low" if not (item.denials or item.dangerous_attempts) else f"{item.dangerous_attempts} dangerous, {item.denials} denied"
+        deps = escape(", ".join(item.new_dependencies)) if item.new_dependencies else "none"
+        console.print(f"  Files: {item.files_changed} (+{item.additions} -{item.deletions})   New deps: {deps}   Risk: {risk}")
+        tokens = f"{item.tokens:,}" if item.tokens is not None else "-"
+        cost = f"${item.cost_usd:.4f}" if item.cost_usd is not None else "unknown"
+        retries = f"   Retries: {item.retries}" if item.retries else ""
+        console.print(f"  Tokens: {tokens}   Cost: {cost}   Time: {item.duration_seconds:.1f}s   Tool calls: {item.tool_calls}{retries}")
+        if not score.eligible:
+            console.print(f"  [red]{item.candidate_id} ineligible: {escape('; '.join(score.violations))}[/red]")
+        console.print()
+
+
+def show_comparison(console: Console, run: ExplorationRun) -> None:
+    """MEASURED evidence, then MODEL-ASSESSMENT (if any), then the policy and the recommendation."""
+    comparison = run.comparison
+    console.rule("[bold]MEASURED[/bold] [dim](from Forge's own records)[/dim]", align="left")
+    show_candidates(console, run)
+    if comparison is None:
+        return
+
+    if comparison.assessments:
+        reviewer = comparison.assessments[0].reviewer
+        console.rule(f"[bold]MODEL-ASSESSMENT[/bold] [dim]by {escape(reviewer)}: an opinion, not a measurement (1-5)[/dim]", align="left")
+        for assessment in comparison.assessments:
+            scores = ", ".join(f"{key.replace('_', ' ')} {value}" for key, value in assessment.scores.items())
+            console.print(f"[bold]{assessment.candidate_id}[/bold] {escape(scores)}")
+            if assessment.rationale:
+                console.print(f"  [dim]{escape(assessment.rationale)}[/dim]")
+        console.print()
+
+    weights = ", ".join(f"{factor} {round(100 * weight)}%" for factor, weight in comparison.weights.items() if weight > 0)
+    console.print(f"[dim]Priorities: {weights}[/dim]")
+    for note in comparison.notes:
+        console.print(f"[dim]note: {escape(note)}[/dim]")
+    titles = {result.candidate_id: result.plan.title for result in run.candidates}
+    if comparison.recommended:
+        console.print(f"\n[bold green]Recommended: Candidate {comparison.recommended}[/bold green] · {escape(titles.get(comparison.recommended, ''))}")
+        explain_choice(console, comparison.reasons, comparison.tradeoffs)
+    else:
+        console.print("\n[bold yellow]No candidate meets the selection constraints.[/bold yellow]")
+
+
+def explain_choice(console: Console, reasons: list[str], tradeoffs: list[str]) -> None:
+    if reasons:
+        console.print("Reasons:")
+        for reason in reasons:
+            console.print(f"  [green]+[/green] {escape(reason)}")
+    if tradeoffs:
+        console.print("Tradeoffs:")
+        for tradeoff in tradeoffs:
+            console.print(f"  [yellow]-[/yellow] {escape(tradeoff)}")

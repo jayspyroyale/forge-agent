@@ -141,3 +141,22 @@ These approaches already exist. Propose different ones; do not repeat them:
 APPROACH_PLANNER_RETRY = """\
 Your reply could not be used: {problem}
 Reply again with JSON only, in the shape described."""
+
+CANDIDATE_REVIEWER = """\
+You are reviewing several candidate implementations of the same task. Forge has already measured
+what can be measured (tests, diff size, dependencies, cost); do not judge correctness or test
+results. Judge only what measurement cannot show, from the diffs below.
+
+Score each candidate from 1 (poor) to 5 (excellent) on:
+maintainability, architectural_fit, readability, simplicity_of_design, appropriateness, scalability.
+
+Reply with JSON only:
+{"reviews": [{"candidate": "A", "scores": {"maintainability": 4, "architectural_fit": 3,
+"readability": 4, "simplicity_of_design": 5, "appropriateness": 4, "scalability": 2},
+"rationale": "one or two sentences"}]}"""
+
+CANDIDATE_REVIEW_REQUEST = """\
+Task:
+{task}
+
+{candidates}"""
