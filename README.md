@@ -89,6 +89,8 @@ pip install -e ".[dev]"
 ## CLI commands
 
 ```bash
+forge                           # interactive session: type tasks, /help, /exit
+forge "Fix the failing tests"   # one task (same as: forge run "...")
 forge --help                    # show available commands
 forge --version                 # show the installed version
 forge doctor                    # check that your local environment is ready
@@ -100,6 +102,8 @@ forge tools list                # list built-in tools
 forge tools describe read_file  # show a tool's argument schema
 forge tools run read_file path=README.md max_lines=20
 forge run "Read README.md and summarize it"   # agent loop
+forge run --verbose "..."       # also show tool output; --debug shows everything
+forge tasks list                # recorded tasks; then: forge tasks show ID / forge tasks undo ID
 ```
 
 `forge ask` options: `--provider/-p`, `--model/-m`, `--base-url`, `--debug` (show full tracebacks).
@@ -162,7 +166,7 @@ The roadmap will change as the project evolves.
 forge/
 ├── __init__.py          # package version
 ├── __main__.py          # enables `python -m forge`
-├── cli.py               # Typer commands; display only, no agent logic
+├── cli/                 # Typer + Rich: commands, live event rendering, reports, interactive session
 ├── config.py            # ForgeConfig and environment variables
 ├── doctor.py            # local environment checks used by `forge doctor`
 ├── models/

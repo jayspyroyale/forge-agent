@@ -32,9 +32,9 @@ dev = ["pytest>=8"]
 Repository = "https://github.com/jayspyroyale/forge-agent"
 
 # This line is what creates the `forge` command on your PATH.
-# It means: "when someone runs `forge`, call the object `app` in module `forge.cli`".
+# It means: "when someone runs `forge`, call the function `main` in module `forge.cli`".
 [project.scripts]
-forge = "forge.cli:app"
+forge = "forge.cli:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "forge.__version__" }

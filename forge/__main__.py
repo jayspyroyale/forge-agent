@@ -1,5 +1,5 @@
 """Allows running Forge with `python -m forge`."""
 
-from forge.cli import app
+from forge.cli import main
 
-app()
+main()

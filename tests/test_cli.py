@@ -155,8 +155,9 @@ def test_run_shows_verification_evidence(calculator_project, monkeypatch):
     result = runner.invoke(app, ["run", "--yes", "Fix multiply"])
 
     assert result.exit_code == 0, result.output
-    assert "verifying: pytest" in result.output
-    assert "Changed: calculator.py" in result.output
+    assert "verifying pytest" in result.output
+    assert "Changed:" in result.output
+    assert "calculator.py +1 -1" in result.output
     assert "✓ test" in result.output
     assert "pytest passed" in result.output
     assert "- lint" in result.output
