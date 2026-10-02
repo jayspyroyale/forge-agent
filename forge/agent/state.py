@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from forge.models.base import Message
+from forge.models.types import Message
 
 
 class AgentState(BaseModel):

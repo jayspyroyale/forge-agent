@@ -24,3 +24,51 @@ def test_doctor_succeeds():
     assert result.exit_code == 0
     assert "Forge Doctor" in result.output
     assert "Everything looks good." in result.output
+
+
+def test_models_list_shows_builtin_providers():
+    result = runner.invoke(app, ["models", "list"])
+    assert result.exit_code == 0
+    for name in ["fake", "openai", "ollama"]:
+        assert name in result.output
+
+
+def test_ask_with_fake_provider():
+    result = runner.invoke(app, ["ask", "--provider", "fake", "Reply with exactly FORGE_OK"])
+    assert result.exit_code == 0
+    assert "[fake] Reply with exactly FORGE_OK" in result.output
+    assert "fake · fake-model" in result.output
+
+
+def test_ask_uses_provider_from_environment(monkeypatch):
+    monkeypatch.setenv("FORGE_PROVIDER", "fake")
+    result = runner.invoke(app, ["ask", "hello"])
+    assert result.exit_code == 0
+    assert "[fake] hello" in result.output
+
+
+def test_ask_without_api_key_shows_clear_error():
+    # conftest.py removes OPENAI_API_KEY, so the default "openai" provider has no key.
+    result = runner.invoke(app, ["ask", "hello"])
+    assert result.exit_code == 1
+    assert "OPENAI_API_KEY" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_ask_with_debug_shows_traceback():
+    result = runner.invoke(app, ["ask", "--debug", "hello"])
+    assert result.exit_code == 1
+    assert "Traceback" in result.output
+
+
+def test_ask_with_unknown_provider():
+    result = runner.invoke(app, ["ask", "--provider", "nope", "hello"])
+    assert result.exit_code == 1
+    assert "Unknown model provider 'nope'" in result.output
+
+
+def test_ask_with_invalid_environment_value(monkeypatch):
+    monkeypatch.setenv("FORGE_TEMPERATURE", "hot")
+    result = runner.invoke(app, ["ask", "--provider", "fake", "hello"])
+    assert result.exit_code == 1
+    assert "Invalid configuration" in result.output

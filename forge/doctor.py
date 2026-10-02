@@ -71,13 +71,13 @@ def check_git() -> CheckResult:
 
 def check_config() -> CheckResult:
     try:
-        config = ForgeConfig()
+        config = ForgeConfig.from_env()
     except ValidationError as error:
         return CheckResult(name="Configuration valid", passed=False, detail=str(error))
     return CheckResult(
         name="Configuration valid",
         passed=True,
-        detail=f"max_steps={config.max_steps}, debug={config.debug}",
+        detail=f"provider={config.provider}, model={config.model or 'provider default'}",
     )
 
 

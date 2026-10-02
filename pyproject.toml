@@ -21,6 +21,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "pydantic>=2",
+    "openai>=3.23,<4",
 ]
 dynamic = ["version"]
 
@@ -43,3 +44,6 @@ include = ["forge*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Live tests call real model servers. They never run by default; use `pytest -m live`.
+addopts = "-m 'not live'"
+markers = ["live: calls a real model provider (needs network, a server, or an API key)"]

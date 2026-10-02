@@ -1,1 +1,1 @@
-"""Model provider interface and registry. Real providers arrive in a later phase."""
+"""The model layer: normalized types, the provider interface, adapters, and the registry."""

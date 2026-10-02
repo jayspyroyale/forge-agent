@@ -2,7 +2,7 @@
 
 Forge is a lightweight, model-agnostic runtime for building AI agents that can safely interact with software projects.
 
-> **Status: very early development (v0.1).** Forge currently provides its project foundation and a small CLI. It does **not** run AI agents yet.
+> **Status: very early development (v0.2).** Forge can send a prompt to a model through a provider-independent interface. It does **not** run AI agents yet: there is no agent loop and no tools.
 
 ## What is Forge?
 
@@ -33,21 +33,28 @@ Eventually, an AI model running inside Forge should be able to:
 - Installable Python package (`pip install -e .`)
 - `forge --help`, `forge --version`
 - `forge doctor` — local environment checks (Python version, package, workspace, Git, configuration)
-- A minimal configuration object (`ForgeConfig`)
-- Module boundaries for the agent, models, tools, and security layers (placeholders only)
-- A test suite run with `pytest`
+- `forge models list` — show the available model providers
+- `forge ask "..."` — send one prompt to a model and print the reply
+- A model-agnostic layer: normalized message, tool-call, response, and usage types; a provider interface; a provider registry; Forge-level model errors
+- Model providers:
+  - `openai` — OpenAI Chat Completions API
+  - `ollama` — local models through Ollama's OpenAI-compatible API
+  - `fake` — offline provider for tests
+- Configuration through `FORGE_*` environment variables
+- A test suite run with `pytest` (no network or API key needed)
 
 ### Planned
 
 Everything below is **not implemented yet**:
 
-- Model provider adapters (OpenAI, Anthropic, Gemini, local models)
 - Agent loop that coordinates the model and tools
 - Built-in tools: read/edit files, search, run commands
 - Permission system with user approval prompts
+- More providers (Anthropic, Gemini, DeepSeek, ...)
+- Streaming replies
 - MCP server support
 - Memory
-- Configuration files and environment-based settings
+- Configuration files
 
 ## Installation
 
@@ -71,36 +78,66 @@ pip install -e ".[dev]"
 ## CLI commands
 
 ```bash
-forge --help      # show available commands
-forge --version   # show the installed version
-forge doctor      # check that your local environment is ready
+forge --help                    # show available commands
+forge --version                 # show the installed version
+forge doctor                    # check that your local environment is ready
+forge models list               # list model providers
+forge ask "Reply with exactly FORGE_OK"            # use the configured provider
+forge ask -p ollama -m llama3 "Explain recursion"  # choose provider and model
+forge ask -p fake "hello"       # offline test provider; prints "[fake] hello"
 ```
 
-Example `forge doctor` output:
-
-```
-Forge Doctor
-
-✓ Python 3.12.10
-✓ Forge package loaded (v0.1.0)
-✓ Workspace accessible (/path/to/your/project)
-✓ Git installed (git version 2.x)
-✓ Configuration valid (max_steps=20, debug=False)
-
-Everything looks good.
-```
+`forge ask` options: `--provider/-p`, `--model/-m`, `--base-url`, `--debug` (show full tracebacks).
 
 You can also run Forge as a module: `python -m forge --help`.
+
+## Configuration
+
+Settings come from environment variables. CLI options override them.
+
+| Variable | Meaning | Default |
+|----------|---------|---------|
+| `FORGE_PROVIDER` | Provider name (`openai`, `ollama`, `fake`) | `openai` |
+| `FORGE_MODEL` | Model name | provider's default (`gpt-5.4-mini` for OpenAI; Ollama has none) |
+| `FORGE_BASE_URL` | Server URL for OpenAI-compatible providers | provider's default |
+| `FORGE_TEMPERATURE` | Sampling temperature, 0–2 | provider's default |
+| `FORGE_TIMEOUT` | Seconds to wait for a reply | `120` |
+| `FORGE_DEBUG` | Show full tracebacks (`true`/`false`) | `false` |
+
+**API keys are never stored in Forge's configuration.** Each provider reads its own key from the environment:
+
+- `openai`: `OPENAI_API_KEY`
+- `ollama`: none needed (runs locally)
+
+Do not commit keys. `.env` files are ignored by Git.
+
+### Using a local model with Ollama
+
+```bash
+ollama pull llama3
+forge ask -p ollama -m llama3 "Reply with exactly FORGE_OK"
+```
+
+Other OpenAI-compatible servers can be used with `-p openai --base-url <url>`.
+
+## Running tests
+
+```bash
+pytest            # all offline tests; no network, no API key
+pytest -m live    # optional tests against real providers
+```
+
+Live tests skip themselves unless their provider is configured: set `OPENAI_API_KEY` for OpenAI, or `FORGE_LIVE_OLLAMA_MODEL` (for example `llama3`) for Ollama.
 
 ## Roadmap
 
 | Phase | Focus | Status |
 |-------|-------|--------|
 | 1 | Project foundation, CLI, config, tests | ✅ Done |
-| 2 | First model provider and a minimal agent loop | Planned |
-| 3 | Core tools (read, search, edit, run) with permission checks | Planned |
+| 2 | Model-agnostic provider layer, first real provider, `forge ask` | ✅ Done |
+| 3 | Agent loop and core tools (read, search, edit, run) with permission checks | Planned |
 | 4 | MCP integration | Planned |
-| 5 | Memory and multi-provider support | Planned |
+| 5 | Memory and more providers | Planned |
 
 The roadmap will change as the project evolves.
 
@@ -111,17 +148,30 @@ forge/
 ├── __init__.py          # package version
 ├── __main__.py          # enables `python -m forge`
 ├── cli.py               # Typer commands; display only, no agent logic
-├── config.py            # ForgeConfig
+├── config.py            # ForgeConfig and environment variables
 ├── doctor.py            # local environment checks used by `forge doctor`
+├── models/
+│   ├── types.py         # Message, ToolCall, ToolDefinition, Usage, ModelResponse
+│   ├── base.py          # ModelProvider interface
+│   ├── errors.py        # Forge-level model errors
+│   ├── registry.py      # provider lookup by name; create_provider(config)
+│   └── providers/
+│       ├── fake.py              # offline provider for tests
+│       └── openai_provider.py   # OpenAI and Ollama adapters
 ├── agent/               # (placeholder) agent loop, state, prompts
-├── models/              # (placeholder) model provider interface and registry
 ├── tools/               # (placeholder) tool interface and registry
 └── security/            # (placeholder) permission decisions
 tests/                   # pytest test suite
 examples/                # usage examples (coming in later phases)
 ```
 
-Dependencies flow in one direction: `cli` → `doctor` / `config`, and `agent` → `models` / `tools` / `security`. The `models`, `tools`, and `security` packages do not import each other or the agent, which keeps the layers independent.
+Dependencies flow in one direction:
+
+- `cli` → `models`, `config`, `doctor`
+- `agent` → `models`, `tools`, `security`, `config`
+- `models` → `config`
+
+`tools` and `security` import nothing else from Forge. Only the files in `models/providers/` know about provider SDKs; everything else uses Forge's own types.
 
 ## Contributing
 
