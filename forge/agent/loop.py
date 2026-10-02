@@ -70,9 +70,9 @@ class Agent:
         self._nudged_empty_reply = False
         self._changes_at_last_verification = 0
 
-    async def run(self, task: str) -> AgentState:
+    async def run(self, task: str, task_id: str | None = None) -> AgentState:
         self._reset()
-        state = AgentState(task=task)
+        state = AgentState(task=task) if task_id is None else AgentState(task=task, task_id=task_id)
         if self.system_prompt:
             state.messages.append(Message.system(self.system_prompt))
         state.messages.append(Message.user(task))

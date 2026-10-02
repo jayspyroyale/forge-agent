@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from forge.agent.state import AgentState
 from forge.models.types import Usage
+from forge.tasks.snapshot import ChangeReport
 from forge.verification.checks import CHECK_KINDS, CheckKind, VerificationResult
 
 Outcome = Literal["verified", "failed", "unverified"]
@@ -68,7 +69,10 @@ class TaskEvidence(BaseModel):
     usage: Usage | None
     final_answer: str | None
     error: str | None
-    # Filled in by later layers (for example Git change tracking).
+    # What the task changed in the workspace, compared with a snapshot taken at
+    # task start (task vs pre-existing changes, line counts, Git HEAD).
+    changes: ChangeReport | None = None
+    # Room for later layers (for example cost estimates) without schema changes.
     extra: dict[str, Any] = Field(default_factory=dict)
 
     def by_outcome(self, outcome: Outcome) -> list[CheckReport]:
@@ -85,6 +89,7 @@ def build_evidence(
     configured_kinds: set[CheckKind],
     provider: str | None = None,
     model: str | None = None,
+    changes: ChangeReport | None = None,
 ) -> TaskEvidence:
     duration = None
     if state.finished_at is not None:
@@ -102,12 +107,14 @@ def build_evidence(
         model=model,
         tool_usage=[_tool_usage(execution) for execution in state.tool_history],
         commands_run=_commands(state),
-        files_changed=state.changed_paths(),
+        # Prefer what the workspace comparison saw (includes changes made by commands).
+        files_changed=changes.changed_paths if changes is not None else state.changed_paths(),
         verification_rounds=[round_.results for round_ in state.verification_rounds],
         checks=_check_reports(state, configured_kinds),
         usage=state.usage,
         final_answer=state.final_answer,
         error=state.error,
+        changes=changes,
     )
 
 

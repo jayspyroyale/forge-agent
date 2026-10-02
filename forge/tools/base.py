@@ -11,7 +11,9 @@ them up, validates arguments, checks permissions, and only then calls
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict
@@ -68,6 +70,13 @@ class ToolContext:
 
     workspace: Workspace
     config: ForgeConfig = field(default_factory=ForgeConfig)
+    # Called with a file's resolved path just before a tool modifies it, so the
+    # task runtime can save the original (see forge.tasks.journal).
+    before_write: Callable[[Path], None] | None = None
+
+    def notify_before_write(self, path: Path) -> None:
+        if self.before_write is not None:
+            self.before_write(path)
 
 
 class Tool(ABC):

@@ -80,8 +80,11 @@ def atomic_write_text(path: Path, text: str, newline: str = "\n", bom: bool = Fa
     content = normalize_newlines(text)
     if newline != "\n":
         content = content.replace("\n", newline)
-    data = ((UTF8_BOM if bom else "") + content).encode("utf-8")
+    return atomic_write_bytes(path, ((UTF8_BOM if bom else "") + content).encode("utf-8"))
 
+
+def atomic_write_bytes(path: Path, data: bytes) -> int:
+    """Write `data` to `path` atomically: temp file in the same directory, then os.replace."""
     descriptor, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".forge-tmp")
     temp_path = Path(temp_name)
     try:

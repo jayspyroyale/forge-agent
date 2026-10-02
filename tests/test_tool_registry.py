@@ -116,6 +116,8 @@ def test_default_tools_are_registered():
         "current_directory",
         "edit_file",
         "file_exists",
+        "git_diff",
+        "git_status",
         "list_files",
         "read_file",
         "run_command",

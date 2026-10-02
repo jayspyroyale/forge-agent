@@ -57,6 +57,7 @@ class WriteFile(Tool):
                 pass  # replacing a non-text file: write plain UTF-8 with "\n"
 
         _prepare_parent(path, args.create_dirs, workspace.relative)
+        context.notify_before_write(path)
         written = atomic_write_text(path, args.content, newline=newline, bom=bom)
         line_count = len(split_lines(normalize_newlines(args.content)))
         action = "Overwrote" if existed else "Created"
@@ -123,6 +124,7 @@ class EditFile(Tool):
             )
 
         updated = original.text.replace(old_text, new_text)
+        context.notify_before_write(path)
         atomic_write_text(path, updated, newline=original.newline, bom=original.bom)
 
         count = len(match_lines)

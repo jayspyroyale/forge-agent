@@ -2,6 +2,7 @@
 
 from forge.tools.builtin.editing import EditFile, WriteFile
 from forge.tools.builtin.filesystem import CurrentDirectory, FileExists, ListFiles, ReadFile, SearchText
+from forge.tools.builtin.git import GitDiffTool, GitStatusTool
 from forge.tools.builtin.terminal import RunCommand
 from forge.tools.registry import ToolRegistry
 
@@ -18,5 +19,7 @@ def create_default_tools() -> ToolRegistry:
             WriteFile(),
             EditFile(),
             RunCommand(),
+            GitStatusTool(),
+            GitDiffTool(),
         ]
     )

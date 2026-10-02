@@ -24,10 +24,13 @@ from forge.agent.state import AgentStatus
 from forge.config import ForgeConfig
 from forge.doctor import run_all_checks
 from forge.evidence import TaskEvidence
+from forge.git.repo import GitRepository
 from forge.models.errors import ModelError
 from forge.models.registry import create_provider, default_registry
 from forge.models.types import Message, ToolCall
 from forge.security.permissions import ApprovalChoice, Approver, PermissionEngine, PermissionRequest
+from forge.tasks.store import TaskNotFoundError, TaskStore
+from forge.tasks.undo import apply_undo, plan_undo
 from forge.tools.base import ToolContext
 from forge.tools.builtin import create_default_tools
 from forge.tools.executor import ToolExecutor
@@ -42,6 +45,8 @@ models_app = typer.Typer(help="Inspect available model providers.", no_args_is_h
 app.add_typer(models_app, name="models")
 tools_app = typer.Typer(help="Inspect and run Forge tools directly, without a model.", no_args_is_help=True)
 app.add_typer(tools_app, name="tools")
+tasks_app = typer.Typer(help="Review and undo tasks Forge has run in this workspace.", no_args_is_help=True)
+app.add_typer(tasks_app, name="tasks")
 
 console = Console()
 error_console = Console(stderr=True)
@@ -302,10 +307,78 @@ def _print_evidence(evidence: TaskEvidence) -> None:
     console.print()
     if evidence.files_changed:
         console.print("[bold]Changed:[/bold] " + escape(", ".join(evidence.files_changed)))
+    changes = evidence.changes
+    if changes is not None and changes.changes:
+        console.print(f"[bold]Diff:[/bold] [green]+{changes.additions}[/green] [red]-{changes.deletions}[/red]")
+    if changes is not None and changes.pre_existing:
+        console.print(f"[dim]Left untouched: {len(changes.pre_existing)} file(s) you had already changed[/dim]")
     console.print("[bold]Verification:[/bold]")
     for check in evidence.checks:
         color, mark = _OUTCOME_STYLE[check.outcome]
         console.print(f"  [{color}]{mark} {check.kind}[/{color}] [dim]{escape(check.detail)}[/dim]")
+    console.print(f"[dim]Task {evidence.task_id}[/dim]")
+
+
+@tasks_app.command("list")
+def list_tasks() -> None:
+    """List tasks recorded in this workspace."""
+    summaries = TaskStore(Workspace(Path.cwd())).list_tasks()
+    if not summaries:
+        console.print("No recorded tasks in this workspace.")
+        return
+    table = Table(title="Tasks")
+    for column in ("ID", "Started", "Status", "Files", "Task"):
+        table.add_column(column)
+    for summary in summaries:
+        table.add_row(summary.task_id, summary.started_at[:19], summary.status, str(summary.files_changed), summary.task[:60])
+    console.print(table)
+
+
+@tasks_app.command("show")
+def show_task(task_id: Annotated[str, typer.Argument(help="Task ID (see `forge tasks list`).")]) -> None:
+    """Show a recorded task's proof of work."""
+    try:
+        evidence = TaskStore(Workspace(Path.cwd())).load_evidence(task_id)
+    except TaskNotFoundError as error:
+        error_console.print(f"[red]Error:[/red] {escape(str(error))}")
+        raise typer.Exit(code=1)
+    console.print(f"[bold]{escape(evidence.task)}[/bold]")
+    console.print(f"[dim]{evidence.status} · {evidence.steps} steps · started {evidence.started_at:%Y-%m-%d %H:%M:%S}[/dim]")
+    if evidence.changes is not None:
+        for change in evidence.changes.changes:
+            stats = "" if change.additions is None else f" +{change.additions} -{change.deletions}"
+            console.print(f"  {change.kind:8} {escape(change.path)}{stats} [dim]({change.origin})[/dim]")
+    _print_evidence(evidence)
+
+
+@tasks_app.command("undo")
+def undo_task(
+    task_id: Annotated[str, typer.Argument(help="Task ID (see `forge tasks list`).")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Apply the undo. Without this, only show the plan.")] = False,
+) -> None:
+    """Revert a task's file changes where that is provably safe. Never runs Git commands that change state."""
+    workspace = Workspace(Path.cwd())
+    store = TaskStore(workspace)
+    repo = GitRepository.discover(workspace.root)
+    try:
+        plan = plan_undo(store, task_id, repo)
+    except TaskNotFoundError as error:
+        error_console.print(f"[red]Error:[/red] {escape(str(error))}")
+        raise typer.Exit(code=1)
+
+    if not plan.actions:
+        console.print("This task changed no files.")
+        return
+    for action in plan.actions:
+        color = "yellow" if action.action == "skip" else "cyan"
+        console.print(f"  [{color}]{action.action:7}[/{color}] {escape(action.path)} [dim]({escape(action.reason)})[/dim]")
+    if not yes:
+        console.print("\n[dim]Dry run. Re-run with --yes to apply. Current contents are backed up first.[/dim]")
+        return
+    performed = apply_undo(plan, store, repo)
+    console.print(f"\n[green]Reverted {len(performed)} file(s).[/green]")
+    if plan.skipped:
+        console.print(f"[yellow]Skipped {len(plan.skipped)} file(s); see reasons above.[/yellow]")
 
 
 _APPROVAL_CHOICES = {"y": ApprovalChoice.ALLOW_ONCE, "a": ApprovalChoice.ALLOW_SESSION, "n": ApprovalChoice.DENY}

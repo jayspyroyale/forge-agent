@@ -44,7 +44,7 @@ class VerificationRound(BaseModel):
         return not any(result.failing for result in self.results)
 
 
-def _new_task_id() -> str:
+def new_task_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
@@ -54,7 +54,7 @@ def _now() -> datetime:
 
 class AgentState(BaseModel):
     task: str
-    task_id: str = Field(default_factory=_new_task_id)
+    task_id: str = Field(default_factory=new_task_id)
     started_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None
     messages: list[Message] = Field(default_factory=list)

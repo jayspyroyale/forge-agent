@@ -66,6 +66,11 @@ def run_command(
     env: Mapping[str, str] | None = None,
 ) -> CommandResult:
     environment = dict(env) if env is not None else scrub_environment(os.environ)
+    # Python caches compiled modules by source mtime and size. An agent can edit a
+    # file twice within one second without changing its size, and a cached .pyc
+    # from a test run in between would then hide the second edit. Commands run by
+    # Forge therefore never write bytecode caches.
+    environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     started = time.monotonic()
     try:
         process = subprocess.Popen(

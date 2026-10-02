@@ -6,17 +6,23 @@ exploration controller can call `run_task` once per candidate to get fully
 independent runtimes, each returning its own proof of work.
 """
 
+from collections.abc import Callable
+from pathlib import Path
+
 from pydantic import BaseModel
 
 from forge.agent.events import EventHandler
 from forge.agent.loop import Agent
 from forge.agent.prompts import build_system_prompt
-from forge.agent.state import AgentState
+from forge.agent.state import AgentState, new_task_id
 from forge.config import ForgeConfig
 from forge.evidence import TaskEvidence, build_evidence
+from forge.git.repo import GitRepository
 from forge.models.base import ModelProvider
 from forge.models.registry import create_provider
 from forge.security.permissions import Approver, PermissionEngine
+from forge.tasks.snapshot import compute_changes, take_snapshot
+from forge.tasks.store import TaskStore
 from forge.tools.base import ToolContext
 from forge.tools.builtin import create_default_tools
 from forge.tools.executor import ToolExecutor
@@ -35,6 +41,7 @@ def create_agent(
     approver: Approver | None = None,
     permissions: PermissionEngine | None = None,
     checks: list[VerificationCheck] | None = None,
+    before_write: Callable[[Path], None] | None = None,
     on_event: EventHandler | None = None,
 ) -> Agent:
     """Create an agent. Everything except `config` can be injected (tests, custom setups).
@@ -44,7 +51,7 @@ def create_agent(
     and `approver`. `checks` defaults to the checks detected in the workspace.
     """
     workspace = Workspace(config.workspace)
-    context = ToolContext(workspace=workspace, config=config)
+    context = ToolContext(workspace=workspace, config=config, before_write=before_write)
     engine = permissions or PermissionEngine(config.permissions, approver)
     registry = tools or create_default_tools()
     executor = ToolExecutor(registry, context, engine)
@@ -75,17 +82,42 @@ class TaskOutcome(BaseModel):
     evidence: TaskEvidence
 
 
-async def run_task(config: ForgeConfig, task: str, **agent_options) -> TaskOutcome:
-    """Run one task and collect its proof of work. Options are passed to `create_agent`."""
-    agent = create_agent(config, **agent_options)
-    state = await agent.run(task)
+async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **agent_options) -> TaskOutcome:
+    """Run one task and collect its proof of work. Options are passed to `create_agent`.
+
+    Before the agent starts, Forge snapshots the workspace (Git HEAD plus the
+    user's pre-existing changes) and journals every file a tool is about to
+    modify. Afterwards it compares the workspace with the snapshot, so the
+    evidence separates this task's changes from changes that were already
+    there. With `record=True` the snapshot, journal, and evidence are saved
+    under `.forge/tasks/<task_id>/`, which makes the task reviewable and undoable.
+    """
+    workspace = Workspace(config.workspace)
+    repo = GitRepository.discover(workspace.root)
+    snapshot = take_snapshot(workspace, repo)
+    task_id = new_task_id()
+
+    store = TaskStore(workspace) if record else None
+    journal = None
+    if store is not None:
+        store.create(task_id)
+        store.save_checkpoint(task_id, snapshot)
+        journal = store.journal(task_id)
+
+    agent = create_agent(config, before_write=journal.before_write if journal else None, **agent_options)
+    state = await agent.run(task, task_id=task_id)
+
+    changes = compute_changes(snapshot, workspace, repo, journal.pre_images() if journal else None)
     configured = agent.verifier.available_kinds if agent.verifier else set()
     evidence = build_evidence(
         state,
         configured_kinds=configured,
         provider=agent.provider.name,
         model=_model_name(agent.provider),
+        changes=changes,
     )
+    if store is not None:
+        store.save_evidence(evidence)
     return TaskOutcome(state=state, evidence=evidence)
 
 

@@ -49,6 +49,9 @@ Eventually, an AI model running inside Forge should be able to:
 - `examples/broken_calculator/`: a tiny project with a deliberate bug for trying Forge end to end
 - Verification-first completion: Forge detects checks from the project's own config (pytest, ruff, mypy, package.json scripts, cargo, go) and, after the agent changes files, runs them itself before accepting "done". Failures go back to the model to fix (up to 3 attempts)
 - Proof of work: every task produces `TaskEvidence` built only from Forge's records (tools used, commands run, files changed, verification results), reported as VERIFIED / FAILED / UNVERIFIED. A model saying "tests pass" is not evidence
+- Git awareness: read-only `git_status` / `git_diff` tools for the model; a repository reader that refuses any state-changing git command
+- Task tracking: each `forge run` snapshots the workspace first, journals original file contents before edits, and reports which files the task changed (with +/- lines) separately from changes you already had. Records live in `.forge/tasks/<id>/` (ignored by Git)
+- `forge tasks list | show | undo` — review a task's proof of work, and revert its changes only where provably safe (files untouched since the task; your pre-existing changes are never touched; no git reset/checkout)
 - `forge tools list | describe | run` — inspect and run tools directly, without a model
 - `forge run "task"` — the agent loop: model → tool calls → results back to the model → final answer, with a hard step limit (`--max-steps`)
 - Configuration through `FORGE_*` environment variables
@@ -174,7 +177,7 @@ forge/
 ├── tools/               # (placeholder) tool interface and registry
 └── security/            # (placeholder) permission decisions
 tests/                   # pytest test suite
-examples/                # usage examples (coming in later phases)
+examples/                # broken_calculator: a tiny buggy project to try Forge on
 ```
 
 Dependencies flow in one direction:
