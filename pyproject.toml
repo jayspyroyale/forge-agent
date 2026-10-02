@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forge-agent"
+description = "A lightweight, model-agnostic runtime for building AI agents that can safely interact with software projects."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jason Raptis" }]
+keywords = ["ai", "agents", "llm", "cli", "mcp"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "pydantic>=2",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Repository = "https://github.com/jayspyroyale/forge-agent"
+
+# This line is what creates the `forge` command on your PATH.
+# It means: "when someone runs `forge`, call the object `app` in module `forge.cli`".
+[project.scripts]
+forge = "forge.cli:app"
+
+[tool.setuptools.dynamic]
+version = { attr = "forge.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["forge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
