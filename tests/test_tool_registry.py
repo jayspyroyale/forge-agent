@@ -111,10 +111,12 @@ def test_registry_exports_all_definitions():
 def test_default_tools_are_registered():
     assert create_default_tools().names() == [
         "current_directory",
+        "edit_file",
         "file_exists",
         "list_files",
         "read_file",
         "search_text",
+        "write_file",
     ]
 
 

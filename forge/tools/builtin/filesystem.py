@@ -5,18 +5,13 @@ from pathlib import Path
 
 from pydantic import Field
 
-from forge.fileio import normalize_newlines, split_lines
+from forge.fileio import looks_binary, normalize_newlines, split_lines
 from forge.tools.base import NoArgs, Tool, ToolArgs, ToolContext, ToolError, ToolResult
 
 MAX_READ_FILE_BYTES = 10_000_000
 MAX_READ_OUTPUT_CHARS = 100_000
 MAX_SEARCH_FILE_BYTES = 1_000_000
 MAX_SEARCH_LINE_CHARS = 200
-BINARY_SNIFF_BYTES = 8192
-
-
-def looks_binary(data: bytes) -> bool:
-    return b"\x00" in data[:BINARY_SNIFF_BYTES]
 
 
 class CurrentDirectory(Tool):
