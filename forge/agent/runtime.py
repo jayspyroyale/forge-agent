@@ -30,7 +30,7 @@ from forge.tools.registry import ToolRegistry
 from forge.verification.checks import VerificationCheck
 from forge.verification.detect import detect_checks
 from forge.verification.runner import Verifier
-from forge.workspace import Workspace
+from forge.workspace import DEFAULT_IGNORED_DIRS, DEFAULT_PROTECTED_PATHS, Workspace
 
 
 def create_agent(
@@ -50,7 +50,7 @@ def create_agent(
     several tasks; otherwise a new engine is built from `config.permissions`
     and `approver`. `checks` defaults to the checks detected in the workspace.
     """
-    workspace = Workspace(config.workspace)
+    workspace = workspace_from_config(config)
     context = ToolContext(workspace=workspace, config=config, before_write=before_write)
     engine = permissions or PermissionEngine(config.permissions, approver)
     registry = tools or create_default_tools()
@@ -69,10 +69,10 @@ def create_agent(
     return Agent(
         provider or create_provider(config),
         executor,
-        max_steps=config.max_steps,
+        max_steps=config.agent.max_steps,
         system_prompt=system_prompt,
-        verifier=verifier if config.verification == "auto" else None,
-        verification_attempts=config.verification_attempts,
+        verifier=verifier if config.agent.verification == "auto" else None,
+        verification_attempts=config.agent.verification_attempts,
         on_event=on_event,
     )
 
@@ -92,7 +92,7 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
     there. With `record=True` the snapshot, journal, and evidence are saved
     under `.forge/tasks/<task_id>/`, which makes the task reviewable and undoable.
     """
-    workspace = Workspace(config.workspace)
+    workspace = workspace_from_config(config)
     repo = GitRepository.discover(workspace.root)
     snapshot = take_snapshot(workspace, repo)
     task_id = new_task_id()
@@ -126,3 +126,13 @@ def _model_name(provider: ModelProvider) -> str | None:
         return provider.model
     except Exception:  # some providers have no model configured; evidence just omits it
         return None
+
+
+def workspace_from_config(config: ForgeConfig) -> Workspace:
+    """The workspace described by the config: its root plus any extra protected or ignored paths."""
+    settings = config.workspace
+    return Workspace(
+        config.workspace_root,
+        protected_paths=(*DEFAULT_PROTECTED_PATHS, *settings.protected_paths),
+        ignored_dirs=DEFAULT_IGNORED_DIRS | frozenset(settings.ignored_dirs),
+    )

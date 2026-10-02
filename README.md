@@ -54,7 +54,7 @@ Eventually, an AI model running inside Forge should be able to:
 - `forge tasks list | show | undo` — review a task's proof of work, and revert its changes only where provably safe (files untouched since the task; your pre-existing changes are never touched; no git reset/checkout)
 - `forge tools list | describe | run` — inspect and run tools directly, without a model
 - `forge run "task"` — the agent loop: model → tool calls → results back to the model → final answer, with a hard step limit (`--max-steps`)
-- Configuration through `FORGE_*` environment variables
+- Layered configuration (defaults, profile, user and project TOML files, environment, command line) with profiles and `forge config show | paths`
 - A test suite run with `pytest` (no network or API key needed)
 
 ### Planned
@@ -65,7 +65,6 @@ Everything below is **not implemented yet**:
 - Streaming replies
 - MCP server support
 - Memory
-- Configuration files
 
 ## Installation
 
@@ -112,16 +111,50 @@ You can also run Forge as a module: `python -m forge --help`.
 
 ## Configuration
 
-Settings come from environment variables. CLI options override them.
+Configuration is layered, lowest to highest priority:
 
-| Variable | Meaning | Default |
-|----------|---------|---------|
-| `FORGE_PROVIDER` | Provider name (`openai`, `ollama`, `fake`) | `openai` |
-| `FORGE_MODEL` | Model name | provider's default (`gpt-5.4-mini` for OpenAI; Ollama has none) |
-| `FORGE_BASE_URL` | Server URL for OpenAI-compatible providers | provider's default |
-| `FORGE_TEMPERATURE` | Sampling temperature, 0–2 | provider's default |
-| `FORGE_TIMEOUT` | Seconds to wait for a reply | `120` |
-| `FORGE_DEBUG` | Show full tracebacks (`true`/`false`) | `false` |
+```
+defaults → profile → user config → project config → environment (FORGE_*) → command line
+```
+
+- User config: `~/.forge/config.toml` (or `$FORGE_HOME/config.toml`)
+- Project config: `<project>/.forge/config.toml` (safe to commit; secrets are refused)
+
+```toml
+# .forge/config.toml
+profile = "production"          # cheap | balanced (default) | production | maximum-quality | your own
+
+[model]
+provider = "ollama"
+name = "llama3"
+
+[agent]
+max_steps = 25
+verification = "auto"           # run the project's checks after changes ("off" to skip)
+
+[permissions]                   # allow | ask | deny
+write = "ask"
+execute = "ask"
+dangerous = "deny"
+
+[terminal]
+timeout = 120
+output_limit = 12000
+
+[profiles.quick.agent]          # define your own profile
+max_steps = 8
+```
+
+`forge config show` prints every effective value and where it came from; `forge config paths` shows which files are used. Use `forge --profile NAME ...` or `forge run --profile NAME ...` to switch profiles.
+
+Environment variables:
+
+| Variable | Setting |
+|----------|---------|
+| `FORGE_PROVIDER`, `FORGE_MODEL`, `FORGE_BASE_URL`, `FORGE_TEMPERATURE`, `FORGE_TIMEOUT` | `model.*` |
+| `FORGE_MAX_STEPS`, `FORGE_VERIFICATION` | `agent.*` |
+| `FORGE_DEBUG`, `FORGE_VERBOSE` | `ui.*` |
+| `FORGE_PROFILE` | `profile` |
 
 **API keys are never stored in Forge's configuration.** Each provider reads its own key from the environment:
 
@@ -167,7 +200,7 @@ forge/
 ├── __init__.py          # package version
 ├── __main__.py          # enables `python -m forge`
 ├── cli/                 # Typer + Rich: commands, live event rendering, reports, interactive session
-├── config.py            # ForgeConfig and environment variables
+├── config/              # ForgeConfig schema, layered loader, profiles
 ├── doctor.py            # local environment checks used by `forge doctor`
 ├── models/
 │   ├── types.py         # Message, ToolCall, ToolDefinition, Usage, ModelResponse

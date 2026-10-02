@@ -29,7 +29,7 @@ class ModelProvider(ABC):
     @property
     def model(self) -> str:
         """The model to use: the configured one, or this provider's default."""
-        model = self.config.model or self.default_model
+        model = self.config.model.name or self.default_model
         if model is None:
             raise ProviderConfigError(
                 f"The '{self.name}' provider needs a model name. "

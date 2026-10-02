@@ -11,10 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 import forge
-from forge.config import ForgeConfig
+from forge.config import ConfigError, load_config
 
 MIN_PYTHON = (3, 12)
 
@@ -71,13 +71,13 @@ def check_git() -> CheckResult:
 
 def check_config() -> CheckResult:
     try:
-        config = ForgeConfig.from_env()
-    except ValidationError as error:
+        config = load_config().config
+    except ConfigError as error:
         return CheckResult(name="Configuration valid", passed=False, detail=str(error))
     return CheckResult(
         name="Configuration valid",
         passed=True,
-        detail=f"provider={config.provider}, model={config.model or 'provider default'}",
+        detail=f"profile={config.profile}, provider={config.model.provider}, model={config.model.name or 'provider default'}",
     )
 
 

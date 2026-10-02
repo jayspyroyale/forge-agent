@@ -12,6 +12,7 @@ from typing import Annotated
 import typer
 
 from forge import __version__
+from forge.cli.commands.config import config_app
 from forge.cli.commands.doctor import doctor
 from forge.cli.commands.models import ask, models_app
 from forge.cli.commands.run import run
@@ -37,12 +38,18 @@ def _show_version(value: bool) -> None:
 
 @app.callback()
 def main_callback(
+    ctx: typer.Context,
     version: Annotated[
         bool,
         typer.Option("--version", help="Show the Forge version and exit.", callback=_show_version, is_eager=True),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Configuration profile (cheap, balanced, production, maximum-quality, or your own)."),
+    ] = None,
 ) -> None:
     """Forge: a lightweight, model-agnostic runtime for AI coding agents."""
+    ctx.obj = {"profile": profile}
 
 
 app.command()(run)
@@ -52,8 +59,10 @@ app.command()(doctor)
 app.add_typer(models_app, name="models")
 app.add_typer(tools_app, name="tools")
 app.add_typer(tasks_app, name="tasks")
+app.add_typer(config_app, name="config")
 
 ROOT_OPTIONS = frozenset({"--help", "-h", "--version", "--install-completion", "--show-completion"})
+ROOT_VALUE_OPTIONS = frozenset({"--profile"})  # root options followed by a value
 
 
 def command_names() -> set[str]:
@@ -62,13 +71,28 @@ def command_names() -> set[str]:
 
 def route(args: list[str]) -> list[str]:
     """Rewrite argv so the shortcuts above work. Pure function: easy to test."""
-    if not args:
-        return ["session"]
-    first = args[0]
+    head, rest = _split_root_options(args)
+    if not rest:
+        return [*head, "session"]
+    first = rest[0]
     if first in ROOT_OPTIONS or first in command_names():
-        return args
+        return [*head, *rest]
     # Anything else is a task (possibly preceded by run options such as -p).
-    return ["run", *args]
+    return [*head, "run", *rest]
+
+
+def _split_root_options(args: list[str]) -> tuple[list[str], list[str]]:
+    """Separate leading options that belong to `forge` itself, like `--profile production`."""
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in ROOT_VALUE_OPTIONS:
+            index += 2
+        elif any(token.startswith(option + "=") for option in ROOT_VALUE_OPTIONS):
+            index += 1
+        else:
+            break
+    return args[:index], args[index:]
 
 
 def main(argv: list[str] | None = None) -> None:

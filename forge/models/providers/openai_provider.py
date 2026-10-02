@@ -53,8 +53,8 @@ class OpenAIProvider(ModelProvider):
         # Tests pass their own `client`, so no API key or network is needed.
         self._client = client or AsyncOpenAI(
             api_key=self._read_api_key(),
-            base_url=config.base_url or self.default_base_url,
-            timeout=config.timeout,
+            base_url=config.model.base_url or self.default_base_url,
+            timeout=config.model.timeout,
             max_retries=1,
         )
 
@@ -79,8 +79,8 @@ class OpenAIProvider(ModelProvider):
         }
         if tools:
             request["tools"] = [_to_openai_tool(tool) for tool in tools]
-        if self.config.temperature is not None:
-            request["temperature"] = self.config.temperature
+        if self.config.model.temperature is not None:
+            request["temperature"] = self.config.model.temperature
         request.update(options)
 
         try:
@@ -91,7 +91,7 @@ class OpenAIProvider(ModelProvider):
             ) from error
         except openai.APITimeoutError as error:
             raise ModelRequestError(
-                f"'{self.name}' did not reply within {self.config.timeout:g} seconds."
+                f"'{self.name}' did not reply within {self.config.model.timeout:g} seconds."
             ) from error
         except openai.APIConnectionError as error:
             raise ModelRequestError(f"Could not connect to '{self.name}'.") from error

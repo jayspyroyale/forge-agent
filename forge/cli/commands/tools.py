@@ -6,20 +6,20 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from pydantic import ValidationError
 from rich.markup import escape
 from rich.table import Table
 
+from forge.agent.runtime import workspace_from_config
 from forge.cli.approval import make_cli_approver
 from forge.cli.output import console, fail, print_plain
-from forge.config import ForgeConfig
+from forge.cli.settings import load_cli_config
 from forge.models.types import ToolCall
 from forge.security.permissions import PermissionEngine
 from forge.tools.base import ToolContext
 from forge.tools.builtin import create_default_tools
 from forge.tools.executor import ToolExecutor
 from forge.tools.registry import ToolNotFoundError
-from forge.workspace import Workspace, WorkspaceError
+from forge.workspace import WorkspaceError
 
 tools_app = typer.Typer(help="Inspect and run Forge tools directly, without a model.", no_args_is_help=True)
 
@@ -51,6 +51,7 @@ def describe_tool(name: Annotated[str, typer.Argument(help="Tool name.")]) -> No
 
 @tools_app.command("run")
 def run_tool(
+    ctx: typer.Context,
     name: Annotated[str, typer.Argument(help="Tool name.")],
     arguments: Annotated[
         list[str] | None, typer.Argument(help="Arguments as key=value pairs, e.g. path=README.md.")
@@ -66,9 +67,12 @@ def run_tool(
     """Run one tool directly and print its result. Permission rules still apply."""
     try:
         parsed = parse_tool_arguments(arguments or [], json_arguments)
-        config = ForgeConfig.from_env()
-        context = ToolContext(workspace=Workspace(workspace or Path.cwd()), config=config)
-    except (ValueError, ValidationError, WorkspaceError) as error:
+    except ValueError as error:
+        raise fail(str(error), code=2)
+    config = load_cli_config(ctx, **{"workspace.root": str(workspace) if workspace else None}).config
+    try:
+        context = ToolContext(workspace=workspace_from_config(config), config=config)
+    except WorkspaceError as error:
         raise fail(str(error), code=2)
 
     permissions = PermissionEngine(config.permissions, make_cli_approver(auto_approve=yes))

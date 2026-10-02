@@ -2,7 +2,7 @@
 
 The rest of Forge never instantiates a provider class directly. It calls
 `create_provider(config)`, and the registry picks the class named by
-`config.provider`.
+`config.model.provider`.
 """
 
 from forge.config import ForgeConfig
@@ -37,7 +37,7 @@ class ProviderRegistry:
         return sorted(self._providers)
 
     def create(self, config: ForgeConfig) -> ModelProvider:
-        provider_class = self.get(config.provider)
+        provider_class = self.get(config.model.provider)
         return provider_class(config)
 
 
@@ -50,5 +50,5 @@ default_registry.register(OllamaProvider)
 def create_provider(
     config: ForgeConfig, registry: ProviderRegistry = default_registry
 ) -> ModelProvider:
-    """Create the provider named in `config.provider`."""
+    """Create the provider named in `config.model.provider`."""
     return registry.create(config)

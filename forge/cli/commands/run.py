@@ -4,13 +4,13 @@ import asyncio
 from typing import Annotated
 
 import typer
-from pydantic import ValidationError
 
 from forge.agent.runtime import run_task
 from forge.agent.state import AgentStatus
 from forge.cli.approval import make_cli_approver
 from forge.cli.output import Verbosity, console, fail
 from forge.cli.render import TaskRenderer, render_report
+from forge.cli.settings import load_cli_config
 from forge.config import ForgeConfig
 from forge.models.errors import ModelError
 from forge.security.permissions import PermissionEngine
@@ -39,32 +39,42 @@ def execute_task(
     return outcome.state.status == AgentStatus.COMPLETED
 
 
-def verbosity_from(verbose: bool, debug: bool) -> Verbosity:
-    if debug:
+def verbosity_of(config: ForgeConfig) -> Verbosity:
+    if config.ui.debug:
         return "debug"
-    return "verbose" if verbose else "normal"
+    return "verbose" if config.ui.verbose else "normal"
 
 
 def run(
+    ctx: typer.Context,
     task: Annotated[str, typer.Argument(help="What you want the agent to do.")],
     provider: Annotated[
         str | None, typer.Option("--provider", "-p", help="Provider name (see `forge models list`).")
     ] = None,
     model: Annotated[str | None, typer.Option("--model", "-m", help="Model name.")] = None,
     max_steps: Annotated[int | None, typer.Option("--max-steps", help="Maximum number of model calls.")] = None,
+    profile: Annotated[str | None, typer.Option("--profile", help="Configuration profile to use.")] = None,
+    no_verify: Annotated[bool, typer.Option("--no-verify", help="Don't run the project's checks after changes.")] = False,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Approve actions that need approval (never overrides 'deny').")
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show tool output and more detail.")] = False,
-    debug: Annotated[bool | None, typer.Option("--debug", help="Show everything, including tracebacks.")] = None,
+    debug: Annotated[bool, typer.Option("--debug", help="Show everything, including tracebacks.")] = False,
 ) -> None:
     """Run the agent on a task in the current directory."""
-    try:
-        config = ForgeConfig.from_env(provider=provider, model=model, max_steps=max_steps, debug=debug)
-    except ValidationError as error:
-        raise fail(str(error), prefix="Invalid configuration")
-
+    loaded = load_cli_config(
+        ctx,
+        **{
+            "profile": profile,
+            "model.provider": provider,
+            "model.name": model,
+            "agent.max_steps": max_steps,
+            "agent.verification": "off" if no_verify else None,
+            "ui.verbose": True if verbose else None,
+            "ui.debug": True if debug else None,
+        },
+    )
+    config = loaded.config
     permissions = PermissionEngine(config.permissions, make_cli_approver(auto_approve=yes))
-    completed = execute_task(config, task, permissions=permissions, verbosity=verbosity_from(verbose, config.debug))
-    if not completed:
+    if not execute_task(config, task, permissions=permissions, verbosity=verbosity_of(config)):
         raise typer.Exit(code=1)
