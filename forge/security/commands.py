@@ -22,7 +22,10 @@ _RULES: list[tuple[str, str]] = [
     # Destructive Git operations
     (r"\bgit\s+reset\b.*--hard", "discards changes (git reset --hard)"),
     (r"\bgit\s+clean\b.*\s-\w*[fF]", "deletes untracked files (git clean -f)"),
-    (r"\bgit\s+push\b.*(\s--force\b|\s-f\b|\s--mirror\b|\s--delete\b|\s\+\S)", "rewrites remote history (git push --force)"),
+    (
+        r"\bgit\s+push\b.*(\s--force\b|\s-f\b|\s--mirror\b|\s--delete\b|\s\+\S)",
+        "rewrites remote history (git push --force)",
+    ),
     (r"\bgit\s+checkout\s+(--\s+)?\.(\s|$)", "discards working tree changes (git checkout .)"),
     (r"\bgit\s+restore\b", "discards working tree changes (git restore)"),
     (r"\bgit\s+(branch|tag)\s+.*-D\b", "force-deletes branches or tags"),
@@ -44,9 +47,13 @@ _RULES: list[tuple[str, str]] = [
     (r"\b(chmod|chown)\s+(-\w*R\w*\s+)?(777|a\+rwx)\b", "makes files world-writable"),
     (r"\bchown\s+-\w*R", "recursively changes ownership"),
     # Downloading and executing code
-    (r"\b(curl|wget|iwr|Invoke-WebRequest)\b.*\|\s*(sh|bash|zsh|python\d?|iex|Invoke-Expression)\b", "runs code downloaded from the internet"),
+    (
+        r"\b(curl|wget|iwr|Invoke-WebRequest)\b.*\|\s*(sh|bash|zsh|python\d?|iex|Invoke-Expression)\b",
+        "runs code downloaded from the internet",
+    ),
     # Forge's own records and Git internals
     (r"\.forge[/\\]tasks", "touches Forge's task records"),
+    (r"\.forge[/\\](explorations|benchmarks)", "touches Forge's evidence records"),
     (r"(^|[\s\"'=])\.git[/\\]", "touches Git internals directly"),
 ]
 
@@ -101,7 +108,7 @@ def _paths_outside_workspace(command: str, workspace_root: Path) -> list[str]:
         if candidate.startswith("/dev/null") or candidate.upper() == "NUL":
             continue
         try:
-            resolved = (root / candidate).resolve()
+            resolved = (root / candidate.replace("\\", "/")).resolve()
         except (OSError, ValueError):
             continue
         if not resolved.is_relative_to(root):

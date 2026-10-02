@@ -20,6 +20,7 @@ from forge.exploration.controller import ExplorationController
 from forge.exploration.selection import select
 from forge.fileio import atomic_write_text
 from forge.security.permissions import PermissionEngine
+from forge.security.secret_scan import redact_data
 from forge.verification.checks import VerificationCheck
 
 
@@ -181,7 +182,7 @@ async def run_benchmark(
 
 def export_result(result: BenchmarkResult, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, result.model_dump_json(indent=2))
+    atomic_write_text(path, json.dumps(redact_data(result.model_dump(mode="json")), indent=2))
 
 
 def compare_results(paths: list[Path]) -> list[dict]:

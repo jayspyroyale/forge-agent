@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
@@ -19,6 +20,7 @@ from forge.agent.prompts import build_system_prompt
 from forge.agent.state import AgentState, new_task_id
 from forge.config import ContextSettings, ForgeConfig
 from forge.config.loader import user_config_dir
+from forge.concurrency import run_blocking
 from forge.context.engine import ContextBudget
 from forge.context.items import BackgroundItem, Importance, Provenance, SourceType
 from forge.context.retrieval import find_relevant_files, format_relevant_files
@@ -76,7 +78,7 @@ def create_agent(
 
     if checks is None:
         checks = detect_checks(workspace.root)
-    verifier = Verifier(workspace, checks, engine, config.terminal, deadline=deadline)
+    verifier = Verifier(workspace, checks, engine, config.terminal, deadline=deadline, cancelled=context.cancelled)
 
     system_prompt = build_system_prompt(
         "coding",
@@ -161,6 +163,14 @@ class TaskOutcome(BaseModel):
     evidence: TaskEvidence
 
 
+class TaskCancelled(asyncio.CancelledError):
+    """Interruption with the persisted proof of work available to the controller."""
+
+    def __init__(self, outcome: TaskOutcome):
+        super().__init__("Task cancelled; evidence was saved")
+        self.outcome = outcome
+
+
 async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **agent_options) -> TaskOutcome:
     """Run one task and collect its proof of work. Options are passed to `create_agent`.
 
@@ -186,6 +196,7 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
     on_event = agent_options.get("on_event")
     extra_tools = list(agent_options.pop("extra_tools", ()))
     mcp_statuses: list[ServerStatus] = []
+    interrupted = False
     # Memory and MCP servers live exactly as long as the agent runs, even if it fails.
     with contextlib.ExitStack() as resources:
         memory, memories = _prepare_memory(config, workspace, task, on_event)
@@ -196,7 +207,7 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
         if any(server.enabled for server in config.mcp.servers.values()):
             mcp = McpManager(config.mcp, workspace.root)
             resources.callback(mcp.close)
-            mcp_statuses = await asyncio.to_thread(mcp.connect_all)
+            mcp_statuses = await run_blocking(mcp.connect_all, on_cancel=mcp.close)
             _report_mcp(mcp_statuses, on_event)
             extra_tools += mcp.tools()
 
@@ -204,15 +215,27 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
             config, before_write=journal.before_write if journal else None, extra_tools=extra_tools, **agent_options
         )
         background = gather_background(config, workspace, task, memories)
-        state = await agent.run(task, task_id=task_id, background=background)
+        try:
+            state = await agent.run(task, task_id=task_id, background=background)
+        except asyncio.CancelledError:
+            interrupted = True
+            state = agent.state
+            state.status = "cancelled"
+            state.error = "Task interrupted; file changes and evidence retained for recovery."
+            state.finished_at = datetime.now(UTC)
 
     changes = compute_changes(snapshot, workspace, repo, journal.pre_images() if journal else None)
-    if changes.changes:
+    if changes.changes and not interrupted:
         try:
             await agent.verify_final(state)
         except BudgetExhausted as error:
             state.status = "budget_exhausted"
             state.error = str(error)
+        except asyncio.CancelledError:
+            interrupted = True
+            state.status = "cancelled"
+            state.error = "Final verification interrupted; evidence retained for recovery."
+            state.finished_at = datetime.now(UTC)
     configured = agent.verifier.available_kinds if agent.verifier else set()
     evidence = build_evidence(
         state,
@@ -230,7 +253,10 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
     if store is not None:
         store.save_evidence(evidence)
         store.save_context(task_id, agent.context.manifest())
-    return TaskOutcome(state=state, evidence=evidence)
+    outcome = TaskOutcome(state=state, evidence=evidence)
+    if interrupted:
+        raise TaskCancelled(outcome)
+    return outcome
 
 
 def _report_mcp(statuses: list[ServerStatus], on_event: EventHandler | None) -> None:
@@ -242,7 +268,9 @@ def _report_mcp(statuses: list[ServerStatus], on_event: EventHandler | None) -> 
             continue
         on_event(Notice(message=f"MCP server '{status.name}': {len(status.tools)} tool(s)"))
         for skipped in status.skipped:
-            on_event(Notice(level="warning", message=f"MCP tool '{status.name}.{skipped.name}' skipped: {skipped.reason}"))
+            on_event(
+                Notice(level="warning", message=f"MCP tool '{status.name}.{skipped.name}' skipped: {skipped.reason}")
+            )
 
 
 def _prepare_memory(

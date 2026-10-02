@@ -1,12 +1,14 @@
 """Shared terminal output helpers for the CLI."""
 
 import json
+import io
 import sys
 from typing import Any, Literal
 
 import typer
 from rich.console import Console
 from rich.markup import escape
+from forge.security.secret_scan import redact_data, redact_secrets
 
 Verbosity = Literal["normal", "verbose", "debug"]
 
@@ -27,14 +29,16 @@ def make_streams_safe() -> None:
 
 def print_plain(text: str) -> None:
     """Print text exactly as given: no markup, no highlighting, no re-wrapping."""
-    console.print(text, markup=False, highlight=False, soft_wrap=True)
+    console.print(redact_secrets(text), markup=False, highlight=False, soft_wrap=True)
 
 
 def fail(message: str, *, debug: bool = False, code: int = 1, prefix: str = "Error") -> typer.Exit:
     """Print a one-line error (plus a traceback in debug mode) and return the Exit to raise."""
     if debug:
-        error_console.print_exception()
-    error_console.print(f"[red]{escape(prefix)}:[/red] {escape(message)}")
+        trace = io.StringIO()
+        Console(file=trace, width=error_console.width).print_exception()
+        error_console.print(redact_secrets(trace.getvalue()), markup=False, highlight=False)
+    error_console.print(f"[red]{escape(prefix)}:[/red] {escape(redact_secrets(message))}")
     return typer.Exit(code=code)
 
 
@@ -46,7 +50,7 @@ def short_value(value: Any, limit: int = 60) -> str:
 
 def short_arguments(arguments: dict[str, Any], limit: int = 110) -> str:
     """Tool arguments as a compact `key=value` line for display."""
-    text = " ".join(f"{key}={short_value(value)}" for key, value in arguments.items())
+    text = " ".join(f"{key}={short_value(value)}" for key, value in redact_data(arguments).items())
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 

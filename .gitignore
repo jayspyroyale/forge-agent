@@ -37,6 +37,7 @@ coverage.xml
 *.pfx
 secrets.*
 credentials.*
+.forge/*.log
 .netrc
 
 # --- Editors and IDEs ---

@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event
 from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict
@@ -57,7 +58,7 @@ class ToolResult(BaseModel):
 class ToolArgs(BaseModel):
     """Base class for tool argument models. Unknown arguments are rejected."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class NoArgs(ToolArgs):
@@ -74,6 +75,7 @@ class ToolContext:
     # task runtime can save the original (see forge.tasks.journal).
     before_write: Callable[[Path], None] | None = None
     deadline: float | None = None  # monotonic run deadline, supplied by the controller
+    cancelled: Event = field(default_factory=Event)
 
     def notify_before_write(self, path: Path) -> None:
         if self.before_write is not None:

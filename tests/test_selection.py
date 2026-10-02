@@ -48,7 +48,9 @@ def candidate(
             return CheckReport(kind=kind, outcome="unverified", detail="not configured")
         return CheckReport(kind=kind, outcome=outcome, detail=f"{kind} {outcome}")
 
-    usage = [ToolUsage(step=1, name="run_command", success=False, risk="dangerous", denied=True) for _ in range(dangerous)]
+    usage = [
+        ToolUsage(step=1, name="run_command", success=False, risk="dangerous", denied=True) for _ in range(dangerous)
+    ]
     usage += [ToolUsage(step=1, name="write_file", success=False, risk="write", denied=True) for _ in range(denied)]
     evidence = TaskEvidence(
         task_id=f"task{cid}",
@@ -68,7 +70,14 @@ def candidate(
         error=None,
     )
     deltas = [
-        FileDelta(path=f"f{n}.py", kind="modified", additions=adds if n == 0 else 0, deletions=dels if n == 0 else 0, baseline_hash="x", final_hash="y")
+        FileDelta(
+            path=f"f{n}.py",
+            kind="modified",
+            additions=adds if n == 0 else 0,
+            deletions=dels if n == 0 else 0,
+            baseline_hash="x",
+            final_hash="y",
+        )
         for n in range(files)
     ]
     return CandidateResult(
@@ -85,7 +94,9 @@ def candidate(
 
 
 def weights(**values):
-    base = dict.fromkeys(("correctness", "safety", "cost", "speed", "simplicity", "minimal_diff", "maintainability", "scalability"), 0)
+    base = dict.fromkeys(
+        ("correctness", "safety", "cost", "speed", "simplicity", "minimal_diff", "maintainability", "scalability"), 0
+    )
     base.update(values)
     return SelectionWeights(**base)
 
@@ -107,7 +118,11 @@ def test_measured_values_come_from_records_not_from_the_model():
 
 
 def test_correctness_dominates_by_default():
-    comparison = compare([candidate("A", tests="failed", status="verification_failed", cost=0.01), candidate("B", cost=0.5)], DEFAULT, RULES)
+    comparison = compare(
+        [candidate("A", tests="failed", status="verification_failed", cost=0.01), candidate("B", cost=0.5)],
+        DEFAULT,
+        RULES,
+    )
     assert comparison.recommended == "B"
     assert comparison.ranking == ["B"]
 
@@ -125,7 +140,9 @@ def test_weights_change_the_winner():
 
 
 def test_weights_are_normalized_and_validated():
-    assert sum(SelectionWeights(correctness=50, safety=20, cost=10, speed=10, simplicity=10).normalized().values()) == pytest.approx(1)
+    assert sum(
+        SelectionWeights(correctness=50, safety=20, cost=10, speed=10, simplicity=10).normalized().values()
+    ) == pytest.approx(1)
     assert weights(correctness=1).normalized()["correctness"] == 1
     with pytest.raises(ValidationError, match="at least one selection weight"):
         weights()
@@ -141,8 +158,9 @@ def test_nonfinite_weights_are_rejected(value):
 
 
 def test_required_security_checks_cannot_be_unverified():
-    comparison = compare([candidate("A", lint="unverified")], DEFAULT,
-                         SelectionConstraints(security_checks_must_pass=True))
+    comparison = compare(
+        [candidate("A", lint="unverified")], DEFAULT, SelectionConstraints(security_checks_must_pass=True)
+    )
     assert comparison.recommended is None
     assert "lint were not verified" in comparison.score("A").violations
 
@@ -168,7 +186,11 @@ def test_constraint_violation_makes_a_candidate_ineligible_whatever_its_score():
         (candidate("A", files=12), SelectionConstraints(max_files_changed=10), "changes 12 files (limit 10)"),
         (candidate("A", cost=0.9), SelectionConstraints(max_cost_usd=0.5), "cost $0.9000 (limit $0.5000)"),
         (candidate("A"), SelectionConstraints(max_cost_usd=0.5), "cost unknown"),
-        (candidate("A", dangerous=1), SelectionConstraints(security_checks_must_pass=True), "attempted 1 dangerous action(s)"),
+        (
+            candidate("A", dangerous=1),
+            SelectionConstraints(security_checks_must_pass=True),
+            "attempted 1 dangerous action(s)",
+        ),
         (candidate("A", lint="failed"), SelectionConstraints(security_checks_must_pass=True), "lint failed"),
         (candidate("A", tests="unverified"), RULES, "tests were not verified"),
         (candidate("A", status="max_steps"), RULES, "did not complete (max steps)"),
@@ -254,11 +276,17 @@ def test_reviewer_output_is_parsed_and_validated():
         '{"reviews": [{"candidate": "a", "scores": {"maintainability": 4, "scalability": 9, "vibes": 5}, "rationale": "clean"},'
         ' {"candidate": "Z", "scores": {"maintainability": 1}}]}'
     )
-    result = asyncio.run(review_candidates(FakeModelProvider(responses=[reply]), "t", [candidate("A"), candidate("B")], {"A": "+x", "B": "+y"}))
+    result = asyncio.run(
+        review_candidates(
+            FakeModelProvider(responses=[reply]), "t", [candidate("A"), candidate("B")], {"A": "+x", "B": "+y"}
+        )
+    )
     (assessment,) = result.assessments
     assert assessment.candidate_id == "A" and assessment.scores == {"maintainability": 4}
     assert assessment.reviewer == "fake:fake-model"
-    unusable = asyncio.run(review_candidates(FakeModelProvider(responses=["I like them all"]), "t", [candidate("A")], {}))
+    unusable = asyncio.run(
+        review_candidates(FakeModelProvider(responses=["I like them all"]), "t", [candidate("A")], {})
+    )
     assert unusable.assessments == [] and "could not be used" in unusable.note
 
 
@@ -308,8 +336,12 @@ def test_people_may_override_constraints_and_it_is_recorded():
 def explored(calculator_project, tmp_path):
     repo = init_repo(calculator_project)
     (repo / "NOTES.md").write_text("mine\n")  # unrelated uncommitted work
-    scripts = Scripts(repo, {"planner": [plans_reply("Fix", "Other fix")], "A": [edit(BUG, FIX), "ok"], "B": ["nothing"]})
-    controller = ExplorationController(explore_config(repo, tmp_path), permissions=permissive(), provider_factory=scripts)
+    scripts = Scripts(
+        repo, {"planner": [plans_reply("Fix", "Other fix")], "A": [edit(BUG, FIX), "ok"], "B": ["nothing"]}
+    )
+    controller = ExplorationController(
+        explore_config(repo, tmp_path), permissions=permissive(), provider_factory=scripts
+    )
     run = asyncio.run(controller.explore("Fix multiply."))
     return repo, controller, run
 
@@ -367,3 +399,34 @@ def test_damaged_record_is_never_applied(explored):
 def test_candidate_that_changed_nothing_cannot_be_applied(explored):
     _, controller, run = explored
     assert "changed nothing" in preview_apply(run, "B", controller.workspace).conflicts[0]
+
+
+def test_undo_rechecks_files_after_preview(explored):
+    repo, controller, run = explored
+    record, _ = apply_candidate(run, "A", controller.workspace, controller.store)
+    store = TaskStore(controller.workspace)
+    plan = plan_undo(store, record.task_id)
+    later_work = "# later user edit\n"
+    (repo / "calculator.py").write_text(later_work)
+    assert apply_undo(plan, store) == []
+    assert (repo / "calculator.py").read_text() == later_work
+
+
+def test_undo_refuses_damaged_original(explored):
+    repo, controller, run = explored
+    record, _ = apply_candidate(run, "A", controller.workspace, controller.store)
+    store = TaskStore(controller.workspace)
+    plan = plan_undo(store, record.task_id)
+    blob = next((store.directory(record.task_id) / "originals").glob("*.bin"))
+    blob.write_bytes(b"damaged")
+    before = tree_hashes(repo)
+    with pytest.raises(ValueError, match="damaged"):
+        apply_undo(plan, store)
+    assert tree_hashes(repo) == before
+
+
+def test_apply_refuses_another_workspace(explored, tmp_path):
+    _, _, run = explored
+    other = tmp_path / "other"
+    other.mkdir()
+    assert "another workspace" in preview_apply(run, "A", Workspace(other)).conflicts[0]

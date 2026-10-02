@@ -19,6 +19,8 @@ from forge.evidence import TaskEvidence
 from forge.fileio import atomic_write_text
 from forge.tasks.journal import FileJournal
 from forge.tasks.snapshot import WorkspaceSnapshot
+from forge.tasks.paths import record_path
+from forge.security.secret_scan import redact_data
 from forge.workspace import Workspace
 
 TASKS_DIR = Path(".forge") / "tasks"
@@ -39,12 +41,15 @@ class TaskSummary(BaseModel):
 class TaskStore:
     def __init__(self, workspace: Workspace) -> None:
         self.workspace = workspace
-        self.root = workspace.root / TASKS_DIR
+        self.root = record_path(workspace.root, TASKS_DIR)
 
     def directory(self, task_id: str) -> Path:
         if not task_id.isalnum():
             raise TaskNotFoundError(f"Invalid task id: {task_id}")
-        return self.root / task_id
+        return record_path(self.workspace.root, TASKS_DIR / task_id)
+
+    def _file(self, task_id: str, name: str) -> Path:
+        return record_path(self.workspace.root, self.directory(task_id).relative_to(self.workspace.root) / name)
 
     def create(self, task_id: str) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -59,17 +64,20 @@ class TaskStore:
         return FileJournal(self.directory(task_id), self.workspace)
 
     def save_checkpoint(self, task_id: str, snapshot: WorkspaceSnapshot) -> None:
-        atomic_write_text(self.directory(task_id) / "checkpoint.json", snapshot.model_dump_json(indent=2))
+        atomic_write_text(self._file(task_id, "checkpoint.json"), snapshot.model_dump_json(indent=2))
 
     def save_evidence(self, evidence: TaskEvidence) -> None:
-        atomic_write_text(self.directory(evidence.task_id) / "evidence.json", evidence.model_dump_json(indent=2))
+        atomic_write_text(
+            self._file(evidence.task_id, "evidence.json"),
+            json.dumps(redact_data(evidence.model_dump(mode="json")), indent=2),
+        )
 
     def save_context(self, task_id: str, manifest: list[dict]) -> None:
         """Which context items the task used, where each came from, and how it was last sent."""
-        atomic_write_text(self.directory(task_id) / "context.json", json.dumps(manifest, indent=2))
+        atomic_write_text(self._file(task_id, "context.json"), json.dumps(redact_data(manifest), indent=2))
 
     def load_evidence(self, task_id: str) -> TaskEvidence:
-        path = self.directory(task_id) / "evidence.json"
+        path = self._file(task_id, "evidence.json")
         if not path.is_file():
             raise TaskNotFoundError(f"No recorded task '{task_id}' in {self.root}")
         return TaskEvidence.model_validate_json(path.read_text(encoding="utf-8"))

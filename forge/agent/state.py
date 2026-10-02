@@ -23,6 +23,7 @@ class AgentStatus(StrEnum):
     MAX_STEPS = "max_steps"  # stopped by the step limit
     FAILED = "failed"  # stopped by an error (for example the model provider failed)
     BUDGET_EXHAUSTED = "budget_exhausted"
+    CANCELLED = "cancelled"
 
 
 class ToolExecution(BaseModel):
@@ -91,5 +92,7 @@ class AgentState(BaseModel):
     def change_count(self) -> int:
         """How many successful file-changing tool calls happened. Used to decide when to re-verify."""
         return sum(
-            1 for execution in self.tool_history if execution.result.success and execution.result.metadata.get("changed_paths")
+            1
+            for execution in self.tool_history
+            if execution.result.success and execution.result.metadata.get("changed_paths")
         )

@@ -61,7 +61,7 @@ class MemoryStore:
             self._db = sqlite3.connect(str(path), autocommit=False, timeout=5.0, check_same_thread=False)
             self._db.row_factory = sqlite3.Row
             self._migrate()
-        except sqlite3.DatabaseError as error:
+        except (sqlite3.DatabaseError, OSError, MemoryStoreError) as error:
             with contextlib.suppress(Exception):
                 self._db.close()
             raise MemoryStoreError(f"Cannot open the memory database {self.path}: {error}") from error
@@ -81,7 +81,9 @@ class MemoryStore:
     def remember(self, project: str, memory: MemoryInput) -> RememberResult:
         found = find_secrets(memory.content)
         if found:
-            raise MemorySecretError(f"Refusing to store a memory that looks like it contains a secret ({', '.join(found)}).")
+            raise MemorySecretError(
+                f"Refusing to store a memory that looks like it contains a secret ({', '.join(found)})."
+            )
         content = " ".join(memory.content.split())
         memory = memory.model_copy(update={"content": content})
 
@@ -239,7 +241,10 @@ class MemoryStore:
                 rows = self._db.execute(sql, params).fetchall()
         except sqlite3.DatabaseError as error:
             raise MemoryStoreError(f"Memory database error ({self.path}): {error}") from error
-        return [_record(row) for row in rows]
+        try:
+            return [_record(row) for row in rows]
+        except (ValueError, TypeError, KeyError) as error:
+            raise MemoryStoreError(f"Invalid memory record in {self.path}") from error
 
     def _query_one(self, sql: str, params: tuple) -> MemoryRecord | None:
         records = self._query(sql, params)

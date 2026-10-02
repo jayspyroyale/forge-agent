@@ -31,7 +31,7 @@ async def run_demo():
     import sys
 
     with tempfile.TemporaryDirectory(prefix="forge-demo-") as temp:
-        project = Path(temp) / "project"
+        project = (Path(temp) / "project").resolve()
         shutil.copytree(
             builtin_suite() / "fix_python_bug" / "starter", project, ignore=shutil.ignore_patterns("__pycache__")
         )
@@ -41,8 +41,12 @@ async def run_demo():
             workspace=project,
             memory={"enabled": False},
             agent={"verification_attempts": 1},
-            exploration={"approaches": 3, "workspace_dir": Path(temp) / "candidates", "selection_mode": "autonomous",
-                         "weights": {"speed": 0}},
+            exploration={
+                "approaches": 3,
+                "workspace_dir": Path(temp) / "candidates",
+                "selection_mode": "autonomous",
+                "weights": {"speed": 0},
+            },
         )
         usage = Usage(input_tokens=100, output_tokens=20)
 

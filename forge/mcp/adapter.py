@@ -12,6 +12,7 @@ asks for approval). A server's `destructiveHint` can only raise it.
 """
 
 import re
+import time
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -71,7 +72,12 @@ class McpTool(Tool):
         if missing:
             raise ToolError(f"Missing required argument(s) for '{self.name}': {', '.join(missing)}")
         try:
-            result = self.client.call_tool(self.remote_name, arguments, timeout=self.timeout)
+            timeout = (
+                self.timeout
+                if context.deadline is None
+                else min(self.timeout, max(0.001, context.deadline - time.monotonic()))
+            )
+            result = self.client.call_tool(self.remote_name, arguments, timeout=timeout)
         except McpTimeoutError as error:
             raise ToolError(str(error)) from None
         except McpError as error:

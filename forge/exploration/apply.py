@@ -16,6 +16,7 @@ candidate's evidence plus the change report of the apply itself.
 """
 
 import hashlib
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -54,8 +55,17 @@ class ApplyPreview(BaseModel):
 def preview_apply(run: ExplorationRun, candidate_id: str, workspace: Workspace) -> ApplyPreview:
     candidate = run.candidate(candidate_id)
     preview = ApplyPreview(run_id=run.run_id, candidate_id=candidate.candidate_id)
+    if workspace.root != Path(run.baseline.workspace_root).resolve():
+        preview.conflicts.append("exploration belongs to another workspace")
+        return preview
+    paths = [delta.path for delta in candidate.files]
+    if len(set(paths)) != len(paths):
+        preview.conflicts.append("candidate contains duplicate file paths")
+        return preview
     if run.applied is not None:
-        preview.conflicts.append(f"run {run.run_id} was already applied (candidate {run.applied.candidate_id}, task {run.applied.task_id})")
+        preview.conflicts.append(
+            f"run {run.run_id} was already applied (candidate {run.applied.candidate_id}, task {run.applied.task_id})"
+        )
         return preview
     if not candidate.files:
         preview.conflicts.append(f"candidate {candidate.candidate_id} changed nothing")
@@ -76,7 +86,9 @@ def preview_apply(run: ExplorationRun, candidate_id: str, workspace: Workspace) 
     return preview
 
 
-def apply_candidate(run: ExplorationRun, candidate_id: str, workspace: Workspace, store: ExplorationStore) -> tuple[AppliedRecord, TaskEvidence]:
+def apply_candidate(
+    run: ExplorationRun, candidate_id: str, workspace: Workspace, store: ExplorationStore
+) -> tuple[AppliedRecord, TaskEvidence]:
     preview = preview_apply(run, candidate_id, workspace)
     if not preview.ok:
         raise ApplyError("Nothing was applied: " + "; ".join(preview.conflicts))
@@ -93,18 +105,42 @@ def apply_candidate(run: ExplorationRun, candidate_id: str, workspace: Workspace
     tasks.save_checkpoint(task_id, snapshot)
     journal = tasks.journal(task_id)
 
+    preview = preview_apply(run, candidate_id, workspace)
+    if not preview.ok:
+        raise ApplyError("Nothing was applied: " + "; ".join(preview.conflicts))
     written = []
-    for item in preview.items:
-        if item.action == "skip":
-            continue
-        target = workspace.ensure_writable(item.path)
-        journal.before_write(target)
-        if item.action == "delete":
-            target.unlink(missing_ok=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_bytes(target, contents[item.path])
-        written.append(item.path)
+    deltas = {delta.path: delta for delta in candidate.files}
+    try:
+        for item in preview.items:
+            if item.action == "skip":
+                continue
+            target = workspace.ensure_writable(item.path)
+            if file_hash(target) != deltas[item.path].baseline_hash:
+                raise ApplyError(f"{item.path} changed during apply")
+            journal.before_write(target)
+            if item.action == "delete":
+                target.unlink(missing_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(target, contents[item.path])
+            written.append(item.path)
+    except Exception as error:
+        recovery = []
+        for path in reversed(written):
+            try:
+                target = workspace.ensure_writable(path)
+                if file_hash(target) != deltas[path].final_hash:
+                    recovery.append(path)
+                    continue
+                original = journal.original(path)
+                if original is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    atomic_write_bytes(target, original)
+            except Exception:
+                recovery.append(path)
+        detail = f"; inspect task {task_id} originals for {recovery}" if recovery else "; applied files were restored"
+        raise ApplyError(f"Apply failed: {error}{detail}") from error
 
     changes = compute_changes(snapshot, workspace, repo, journal.pre_images())
     evidence = candidate.evidence.model_copy(

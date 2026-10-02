@@ -22,6 +22,7 @@ from forge.agent.events import (
 from forge.agent.state import AgentStatus
 from forge.cli.output import Verbosity, plural, short_arguments
 from forge.evidence import TaskEvidence
+from forge.security.secret_scan import redact_data
 
 PREVIEW_LINES = 15
 _OUTCOME_STYLE = {"verified": ("green", "✓"), "failed": ("red", "✗"), "unverified": ("yellow", "-")}
@@ -51,7 +52,9 @@ class TaskRenderer:
     def _on_ModelRequested(self, event: ModelRequested) -> None:
         if self.verbose:
             size = f", ~{event.context_tokens} tokens" if event.context_tokens is not None else ""
-            self.console.print(f"[dim]· step {event.step}: asking the model ({event.message_count} messages{size})[/dim]")
+            self.console.print(
+                f"[dim]· step {event.step}: asking the model ({event.message_count} messages{size})[/dim]"
+            )
 
     def _on_ModelResponded(self, event: ModelResponded) -> None:
         response = event.response
@@ -120,6 +123,7 @@ class TaskRenderer:
 
 def render_report(console: Console, evidence: TaskEvidence) -> None:
     """The completion report: the model's summary, then Forge's own evidence."""
+    evidence = TaskEvidence.model_validate(redact_data(evidence.model_dump()))
     if evidence.final_answer:
         console.print()
         console.print(evidence.final_answer, markup=False, highlight=False, soft_wrap=True)
@@ -154,12 +158,18 @@ def _changes(console: Console, evidence: TaskEvidence) -> None:
     else:
         console.print("\n[bold]Changed:[/bold]")
         for change in changes.changes:
-            stats = "" if change.additions is None else f" [green]+{change.additions}[/green] [red]-{change.deletions}[/red]"
+            stats = (
+                ""
+                if change.additions is None
+                else f" [green]+{change.additions}[/green] [red]-{change.deletions}[/red]"
+            )
             note = " [dim](also had your earlier edits)[/dim]" if change.origin == "mixed" else ""
             kind = "" if change.kind == "modified" else f" [dim]{change.kind}[/dim]"
             console.print(f"  {escape(change.path)}{kind}{stats}{note}")
     if changes is not None and changes.pre_existing:
-        console.print(f"  [dim]{plural(len(changes.pre_existing), 'file')} you had already changed: left untouched[/dim]")
+        console.print(
+            f"  [dim]{plural(len(changes.pre_existing), 'file')} you had already changed: left untouched[/dim]"
+        )
 
 
 def _verification(console: Console, evidence: TaskEvidence) -> None:

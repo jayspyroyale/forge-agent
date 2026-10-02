@@ -34,10 +34,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from forge import __version__
+from forge.security.secret_scan import redact_secrets
+from forge.terminal import _new_process_group, _kill_process_tree
 
 PROTOCOL_VERSION = "2025-11-25"
 MAX_PAGES = 20
 STDERR_LINES_KEPT = 50
+MAX_MESSAGE_BYTES = 2_000_000
 
 
 class McpError(Exception):
@@ -60,7 +63,7 @@ class McpRemoteError(McpError):
     """The server answered a request with a JSON-RPC error."""
 
     def __init__(self, code: int, message: str) -> None:
-        super().__init__(f"{message} (code {code})")
+        super().__init__(f"{redact_secrets(message)} (code {code})")
         self.code = code
 
 
@@ -123,10 +126,12 @@ class McpClient:
                 stderr=subprocess.PIPE,
                 cwd=self.cwd,
                 env=self.env,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                **_new_process_group(),
             )
         except OSError as error:
-            raise McpConnectionError(f"Could not start MCP server '{self.name}' ({self.command[0]}): {error}") from error
+            raise McpConnectionError(
+                f"Could not start MCP server '{self.name}' ({self.command[0]}): {error}"
+            ) from error
         threading.Thread(target=self._read_stdout, name=f"mcp-{self.name}-out", daemon=True).start()
         threading.Thread(target=self._read_stderr, name=f"mcp-{self.name}-err", daemon=True).start()
 
@@ -161,7 +166,7 @@ class McpClient:
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                process.kill()
+                _kill_process_tree(process)
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=2)
         self._fail_all(f"MCP server '{self.name}' was disconnected")
@@ -227,7 +232,10 @@ class McpClient:
         response = pending.response or {}
         if "error" in response:
             error = response["error"] if isinstance(response["error"], dict) else {}
-            raise McpRemoteError(int(error.get("code", -32603)), str(error.get("message", "unknown error")))
+            code = error.get("code", -32603)
+            if not isinstance(code, int):
+                raise McpProtocolError("MCP error code must be an integer")
+            raise McpRemoteError(code, str(error.get("message", "unknown error")))
         return response.get("result")
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
@@ -251,14 +259,17 @@ class McpClient:
 
     def _read_stdout(self) -> None:
         assert self._process is not None and self._process.stdout is not None
-        for raw in self._process.stdout:
+        while raw := self._process.stdout.readline(MAX_MESSAGE_BYTES + 1):
+            if len(raw) > MAX_MESSAGE_BYTES:
+                self._disconnect("MCP message exceeds the size limit")
+                return
             line = raw.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
             try:
                 message = json.loads(line)
             except json.JSONDecodeError:
-                self.stderr_tail.append(f"[non-JSON on stdout] {line[:200]}")
+                self.stderr_tail.append(redact_secrets(f"[non-JSON on stdout] {line[:200]}"))
                 continue
             if isinstance(message, dict):
                 self._dispatch(message)
@@ -268,8 +279,8 @@ class McpClient:
 
     def _read_stderr(self) -> None:
         assert self._process is not None and self._process.stderr is not None
-        for raw in self._process.stderr:
-            self.stderr_tail.append(raw.decode("utf-8", errors="replace").rstrip())
+        while raw := self._process.stderr.readline(8192):
+            self.stderr_tail.append(redact_secrets(raw.decode("utf-8", errors="replace").rstrip()))
 
     def _dispatch(self, message: dict[str, Any]) -> None:
         if "method" in message:

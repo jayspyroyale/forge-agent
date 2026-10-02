@@ -20,6 +20,8 @@ from forge.fileio import atomic_write_bytes
 from forge.git.repo import GitRepository
 from forge.tasks.snapshot import file_hash
 from forge.tasks.store import TaskStore
+from forge.tasks.paths import record_path
+from forge.workspace import WorkspaceError
 
 Action = Literal["restore", "delete", "skip"]
 
@@ -29,6 +31,7 @@ class UndoAction(BaseModel):
     action: Action
     reason: str
     source: Literal["journal", "head"] | None = None
+    expected_hash: str | None = None
 
 
 class UndoPlan(BaseModel):
@@ -53,23 +56,58 @@ def plan_undo(store: TaskStore, task_id: str, repo: GitRepository | None = None)
         return plan
 
     for change in evidence.changes.changes:
-        current = file_hash(store.workspace.root / change.path)
+        try:
+            target = store.workspace.ensure_writable(change.path)
+        except WorkspaceError:
+            plan.actions.append(UndoAction(path=change.path, action="skip", reason="unsafe or protected path"))
+            continue
+        current = file_hash(target)
         if current != change.after_hash:
-            plan.actions.append(UndoAction(path=change.path, action="skip", reason="changed again after the task finished"))
+            plan.actions.append(
+                UndoAction(path=change.path, action="skip", reason="changed again after the task finished")
+            )
             continue
 
         entry = entries.get(change.path)
         if entry is not None:
             if entry.existed:
-                plan.actions.append(UndoAction(path=change.path, action="restore", reason="restore saved original", source="journal"))
+                plan.actions.append(
+                    UndoAction(
+                        path=change.path,
+                        action="restore",
+                        reason="restore saved original",
+                        source="journal",
+                        expected_hash=current,
+                    )
+                )
             else:
-                plan.actions.append(UndoAction(path=change.path, action="delete", reason="file was created by the task", source="journal"))
+                plan.actions.append(
+                    UndoAction(
+                        path=change.path,
+                        action="delete",
+                        reason="file was created by the task",
+                        source="journal",
+                        expected_hash=current,
+                    )
+                )
             continue
 
         if change.origin == "task" and change.kind == "added":
-            plan.actions.append(UndoAction(path=change.path, action="delete", reason="file was created by the task"))
+            plan.actions.append(
+                UndoAction(
+                    path=change.path, action="delete", reason="file was created by the task", expected_hash=current
+                )
+            )
         elif change.origin == "task" and repo is not None and _head_matches(repo, store, change):
-            plan.actions.append(UndoAction(path=change.path, action="restore", reason="restore version from HEAD", source="head"))
+            plan.actions.append(
+                UndoAction(
+                    path=change.path,
+                    action="restore",
+                    reason="restore version from HEAD",
+                    source="head",
+                    expected_hash=current,
+                )
+            )
         else:
             plan.actions.append(
                 UndoAction(path=change.path, action="skip", reason="no saved copy of the original content")
@@ -83,17 +121,23 @@ def apply_undo(plan: UndoPlan, store: TaskStore, repo: GitRepository | None = No
     backup_root = store.directory(plan.task_id) / "undo-backup"
     performed = []
     for action in plan.safe:
-        target = store.workspace.root / action.path
+        target = store.workspace.ensure_writable(action.path)
+        if file_hash(target) != action.expected_hash:
+            continue  # changed after the preview; never overwrite later work
+        content = None
+        if action.action == "restore":
+            content = (
+                journal.original(action.path) if action.source == "journal" else _head_content(repo, store, action.path)
+            )
+            if content is None:
+                continue
         if target.is_file():
-            backup = backup_root / action.path
+            backup = record_path(store.workspace.root, (backup_root / action.path).relative_to(store.workspace.root))
             backup.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_bytes(backup, target.read_bytes())
         if action.action == "delete":
             target.unlink(missing_ok=True)
         else:
-            content = journal.original(action.path) if action.source == "journal" else _head_content(repo, store, action.path)
-            if content is None:
-                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_bytes(target, content)
         performed.append(action)

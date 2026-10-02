@@ -13,15 +13,18 @@ same guarantees:
 """
 
 import os
+import codecs
 import re
 import signal
 import subprocess
 import sys
 import time
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 
 from pydantic import BaseModel
+from forge.security.secret_scan import redact_secrets
 
 _SECRET_NAME = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY)", re.IGNORECASE)
 _KILL_GRACE_SECONDS = 5
@@ -65,6 +68,7 @@ def run_command(
     output_limit: int = 12_000,
     env: Mapping[str, str] | None = None,
     deadline: float | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CommandResult:
     if deadline is not None:
         timeout = min(timeout, max(0.001, deadline - time.monotonic()))
@@ -95,31 +99,76 @@ def run_command(
             error=f"Could not start command: {error}",
         )
 
+    collectors = [BoundedOutput(output_limit), BoundedOutput(output_limit)]
+    readers = [
+        threading.Thread(target=_drain, args=(stream, collector), daemon=True)
+        for stream, collector in zip((process.stdout, process.stderr), collectors)
+    ]
+    for reader in readers:
+        reader.start()
     timed_out = False
     try:
-        stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
+        end = started + timeout
+        while process.poll() is None or any(reader.is_alive() for reader in readers):
+            if (cancel_event is not None and cancel_event.is_set()) or time.monotonic() >= end:
+                timed_out = True
+                _kill_process_tree(process)
+                break
+            time.sleep(0.01)
+        process.wait(timeout=_KILL_GRACE_SECONDS)
+    except BaseException:
         _kill_process_tree(process)
-        try:
-            stdout_bytes, stderr_bytes = process.communicate(timeout=_KILL_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            # Something still holds the pipes open; give up on the output.
-            stdout_bytes, stderr_bytes = b"", b""
+        raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=_KILL_GRACE_SECONDS)
     duration = time.monotonic() - started
-
-    stdout, stdout_cut = truncate_output(_decode(stdout_bytes), output_limit)
-    stderr, stderr_cut = truncate_output(_decode(stderr_bytes), output_limit)
+    stdout, stdout_cut = collectors[0].result()
+    stderr, stderr_cut = collectors[1].result()
     return CommandResult(
-        command=command,
+        command=redact_secrets(command),
         cwd=str(cwd),
         exit_code=None if timed_out else process.returncode,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=redact_secrets(stdout),
+        stderr=redact_secrets(stderr),
         duration_seconds=round(duration, 3),
         timed_out=timed_out,
         truncated=stdout_cut or stderr_cut,
     )
+
+
+class BoundedOutput:
+    """Keep start/end while draining pipes; memory does not grow with command output."""
+
+    def __init__(self, limit: int):
+        if limit < 1:
+            raise ValueError("output_limit must be positive")
+        self.head_limit = limit // 4
+        self.tail_limit = limit - self.head_limit
+        self.head = self.tail = ""
+        self.total = 0
+
+    def feed(self, text: str):
+        self.total += len(text)
+        needed = self.head_limit - len(self.head)
+        self.head += text[:needed]
+        remaining = text[needed:]
+        self.tail = (self.tail + remaining)[-self.tail_limit :]
+
+    def result(self):
+        removed = self.total - len(self.head) - len(self.tail)
+        text = self.head + (f"\n[... {removed} characters truncated ...]\n" if removed else "") + self.tail
+        return text.replace("\r\n", "\n"), removed > 0
+
+
+def _drain(stream, collector):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    try:
+        while chunk := stream.read(8192):
+            collector.feed(decoder.decode(chunk))
+        collector.feed(decoder.decode(b"", final=True))
+    finally:
+        stream.close()
 
 
 def _decode(data: bytes | None) -> str:
@@ -129,7 +178,7 @@ def _decode(data: bytes | None) -> str:
 def _new_process_group() -> dict:
     """Start the command in its own process group so the whole tree can be killed."""
     if sys.platform == "win32":
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
     return {"start_new_session": True}
 
 

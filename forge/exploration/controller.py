@@ -20,12 +20,13 @@ is a separate, explicit step (forge.exploration.apply).
 """
 
 import time
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from forge.agent.events import EventHandler
-from forge.agent.runtime import memory_project, run_task, workspace_from_config
+from forge.agent.runtime import TaskCancelled, memory_project, run_task, workspace_from_config
 from forge.agent.state import new_task_id
 from forge.config import ForgeConfig
 from forge.config.loader import user_config_dir
@@ -56,6 +57,11 @@ from forge.security.permissions import PermissionEngine
 from forge.verification.detect import detect_checks
 
 MAX_APPROACHES = 10  # hard limit: every candidate is a full agent run
+
+
+class CandidateCancelled(asyncio.CancelledError):
+    def __init__(self, result):
+        self.result = result
 
 
 class ExplorationController:
@@ -100,8 +106,11 @@ class ExplorationController:
         settings = self.config.exploration
         run.settings = self.config.model_dump(mode="json")
         costs = [v for v in (settings.max_api_cost, settings.budget_usd) if v is not None]
-        self.budget = ExplorationBudget(max_tokens=settings.max_tokens,
-            max_cost=min(costs) if costs else None, max_seconds=settings.max_elapsed_time)
+        self.budget = ExplorationBudget(
+            max_tokens=settings.max_tokens,
+            max_cost=min(costs) if costs else None,
+            max_seconds=settings.max_elapsed_time,
+        )
         records = self.store.create(run.run_id)
         self.store.save(run)
         self._emit(
@@ -136,9 +145,13 @@ class ExplorationController:
                 winner = run.candidate(ranking[0]) if ranking else None
                 checks = run.comparison.measured_for(winner.candidate_id).checks if winner else {}
                 strong = bool(checks) and all(v == "verified" for v in checks.values())
-                if strong and (len(ranking) == 1 or (
-                    run.comparison.score(ranking[0]).total - run.comparison.score(ranking[1]).total
-                    >= settings.dominance_margin)):
+                if strong and (
+                    len(ranking) == 1
+                    or (
+                        run.comparison.score(ranking[0]).total - run.comparison.score(ranking[1]).total
+                        >= settings.dominance_margin
+                    )
+                ):
                     run.stop_reason = "strong verified candidate dominates"
                     break
                 quality = (len(ranking), -(winner.additions + winner.deletions)) if winner else (0, 0)
@@ -150,10 +163,18 @@ class ExplorationController:
                 parents = ranking[:2] if settings.experimental_generation else []
                 next_task = task
                 if parents:
-                    next_task += "\nDesign a new implementation informed by this measured evidence; do not merge code:\n"
-                    next_task += "\n".join(f"{c.candidate_id}: {c.plan.summary}; checks={c.checks}; files={c.files_changed}; "
-                        f"dependencies={c.dependencies_added}" for c in run.candidates if c.candidate_id in parents)
-                self._emit(ExplorationDecision(action="continue", reason="Results are weak or close; trying another candidate"))
+                    next_task += (
+                        "\nDesign a new implementation informed by this measured evidence; do not merge code:\n"
+                    )
+                    next_task += "\n".join(
+                        f"{c.candidate_id}: {c.plan.summary}; checks={c.checks}; files={c.files_changed}; "
+                        f"dependencies={c.dependencies_added}"
+                        for c in run.candidates
+                        if c.candidate_id in parents
+                    )
+                self._emit(
+                    ExplorationDecision(action="continue", reason="Results are weak or close; trying another candidate")
+                )
                 plans = await self._plan(run, next_task, 1, parents=parents)
                 if not plans:
                     run.stop_reason = "planner produced no additional distinct approach"
@@ -221,8 +242,13 @@ class ExplorationController:
             usage, notes = None, []
         else:
             planned_count = 1 if settings.strategy == "same_approach" else count
-            result = await planner.plan(task, planned_count, overview=project_overview(self.workspace, task),
-                existing=run.plans, start_index=len(run.plans))
+            result = await planner.plan(
+                task,
+                planned_count,
+                overview=project_overview(self.workspace, task),
+                existing=run.plans,
+                start_index=len(run.plans),
+            )
             plans, usage, notes = result.plans, result.usage, result.notes
             if settings.strategy == "same_approach" and plans:
                 plans = [plans[0].model_copy(update={"id": cid}) for cid in candidate_ids(count, len(run.plans))]
@@ -253,6 +279,13 @@ class ExplorationController:
             result.workspace, result.workspace_kind = workspace.container, workspace.kind
             self._emit(CandidateStarted(candidate_id=plan.id, plan=plan, workspace=workspace.container))
             result = await self._execute(run, plan, isolation, Path(workspace.root), result)
+        except CandidateCancelled as error:
+            result = error.result
+            raise
+        except asyncio.CancelledError:
+            result.status = "cancelled"
+            result.errors.append("candidate interrupted")
+            raise
         except Exception as error:  # one candidate's crash must not stop the others
             result.status = "crashed"
             result.errors.append(f"{type(error).__name__}: {error}")
@@ -261,6 +294,7 @@ class ExplorationController:
             if workspace is not None:
                 if keep:
                     result.kept = True
+                    isolation.retain(workspace)
                 else:
                     isolation.remove(workspace)
             run.candidates.append(result)
@@ -274,16 +308,23 @@ class ExplorationController:
         before = manifest(root)
         config = self._candidate_config(root, plan)
         handler = self.candidate_events(plan.id) if self.candidate_events else None
-        outcome = await run_task(
-            config,
-            candidate_brief(run.task, plan),
-            provider=self._provider(config),
-            permissions=self.permissions,
-            checks=self.checks if self.checks is not None else detect_checks(root, environment_root=self.workspace.root),
-            on_event=handler,
-            operation_guard=self.budget.check,
-            deadline=self.budget.deadline,
-        )
+        interrupted = False
+        try:
+            outcome = await run_task(
+                config,
+                candidate_brief(run.task, plan),
+                provider=self._provider(config),
+                permissions=self.permissions,
+                checks=self.checks
+                if self.checks is not None
+                else detect_checks(root, environment_root=self.workspace.root),
+                on_event=handler,
+                operation_guard=self.budget.check,
+                deadline=self.budget.deadline,
+            )
+        except TaskCancelled as error:
+            outcome = error.outcome
+            interrupted = True
 
         deltas, patch = describe(compare_files(before, root), root, isolation.baseline_content)
         for delta in deltas:
@@ -296,7 +337,7 @@ class ExplorationController:
             return file.read_bytes() if file.is_file() else None
 
         state, evidence = outcome.state, outcome.evidence
-        return result.model_copy(
+        result = result.model_copy(
             update={
                 "status": state.status,
                 "task_id": state.task_id,
@@ -311,13 +352,18 @@ class ExplorationController:
                 "model": evidence.model,
             }
         )
+        if interrupted:
+            raise CandidateCancelled(result)
+        return result
 
     def _candidate_config(self, root: Path, plan: ApproachPlan) -> ForgeConfig:
         config = self.config
         updates: dict = {
             "workspace": config.workspace.model_copy(update={"root": root}),
             # Candidates share the project's memory, not a memory of their temporary copy.
-            "memory": config.memory.model_copy(update={"project": memory_project(config)}),
+            "memory": config.memory.model_copy(
+                update={"project": memory_project(config), "detect_facts": False, "model_writes": False}
+            ),
         }
         if plan.model is not None:
             chosen = {key: value for key, value in plan.model.model_dump().items() if value is not None}
@@ -333,7 +379,9 @@ class ExplorationController:
 
     def _emit(self, event: ExplorationEvent) -> None:
         if self.on_event is not None:
-            self.on_event(event)
+            from forge.security.secret_scan import redact_data
+
+            self.on_event(type(event).model_validate(redact_data(event.model_dump())))
 
 
 def _permission_summary(evidence) -> PermissionSummary:

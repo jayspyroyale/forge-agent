@@ -14,7 +14,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-DEFAULT_PROTECTED_PATHS = (".git", ".forge/tasks", ".forge/explorations")
+DEFAULT_PROTECTED_PATHS = (".git", ".forge/tasks", ".forge/explorations", ".forge/benchmarks")
 
 # Directories that are noise for listing and searching.
 DEFAULT_IGNORED_DIRS = frozenset(
@@ -23,6 +23,8 @@ DEFAULT_IGNORED_DIRS = frozenset(
         ".hg",
         ".svn",
         ".venv",
+        ".venv-codex",
+        ".venv-install",
         "venv",
         "node_modules",
         "__pycache__",
@@ -55,6 +57,17 @@ class Workspace:
     def resolve(self, path: str | Path) -> Path:
         """Return the absolute, fully resolved path, or raise if it leaves the workspace."""
         raw = Path(path)
+        if os.name == "nt":
+            for part in raw.parts[1:] if raw.anchor else raw.parts:
+                if ":" in part or part.rstrip(" .").split(".")[0].upper() in {
+                    "CON",
+                    "PRN",
+                    "AUX",
+                    "NUL",
+                    *(f"COM{n}" for n in range(1, 10)),
+                    *(f"LPT{n}" for n in range(1, 10)),
+                }:
+                    raise WorkspaceError("Windows device paths and alternate data streams are not allowed")
         candidate = raw if raw.is_absolute() else self.root / raw
         # resolve() follows symlinks and collapses "..", so the containment
         # check below sees where the path really points.
@@ -97,10 +110,12 @@ class Workspace:
             # Pruning dirnames in place stops os.walk from descending into them.
             dirnames[:] = sorted(d for d in dirnames if not self._skip_dir(current / d))
             for filename in sorted(filenames):
+                if (current / filename).is_symlink():
+                    continue
                 yield current / filename
 
     def _skip_dir(self, path: Path) -> bool:
-        if path.is_symlink():
+        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
             # Never follow directory symlinks while walking; they may point outside.
             return True
         return self.is_ignored(path)

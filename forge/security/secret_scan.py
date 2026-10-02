@@ -37,3 +37,23 @@ def redact_secrets(text: str) -> str:
     for _, pattern in _PATTERNS:
         text = pattern.sub(REDACTED, text)
     return text
+
+
+def redact_data(value):
+    """Sanitize text/metadata for records and display; never alter executed arguments or file artifacts."""
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {
+            key: (
+                REDACTED
+                if re.search(r"(?:api_?key|password|passwd|secret|(^|_)token$)", str(key), re.I)
+                and isinstance(item, str)
+                and not item.startswith("${")
+                else redact_data(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_data(item) for item in value]
+    return value

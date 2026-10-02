@@ -12,12 +12,14 @@ agent passes back to the model as information it can react to.
 import asyncio
 
 from pydantic import ValidationError
+from forge.concurrency import run_blocking
 
 from forge.models.types import ToolCall
 from forge.security.permissions import PermissionEngine, PermissionRequest
 from forge.tools.base import Tool, ToolArgs, ToolContext, ToolError, ToolResult
 from forge.tools.registry import ToolNotFoundError, ToolRegistry
 from forge.workspace import WorkspaceError
+from forge.security.secret_scan import redact_data
 
 
 class ToolExecutor:
@@ -67,9 +69,9 @@ class ToolExecutor:
 
         # Tools are ordinary blocking functions; run them in a worker thread so
         # the async agent loop is never blocked by slow file or process work.
-        result = await asyncio.to_thread(self._run, tool, args)
+        result = await run_blocking(self._run, tool, args, on_cancel=self.context.cancelled.set)
         result.metadata["permission"] = permission_info
-        return result
+        return ToolResult.model_validate(redact_data(result.model_dump()))
 
     def _run(self, tool: Tool, args: ToolArgs) -> ToolResult:
         try:

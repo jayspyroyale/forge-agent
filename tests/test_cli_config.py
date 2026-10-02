@@ -55,7 +55,8 @@ def test_config_show_never_prints_credentials(project):
     (project / ".forge" / "config.toml").write_text('[model]\nbase_url = "https://alice:hunter2@llm.example.com/v1"\n')
     result = runner.invoke(app, ["config", "show"])
     assert "hunter2" not in result.output
-    assert "***@llm.example.com" in result.output
+    assert result.exit_code == 1
+    assert "secrets must not be stored" in result.output
 
 
 def test_config_paths(project):
@@ -94,7 +95,9 @@ def test_run_uses_project_config_and_cli_overrides(project, monkeypatch):
 
     def provider(config):
         seen["config"] = config
-        return FakeModelProvider(config, responses=[ModelResponse(tool_calls=[ToolCall(id=f"c{n}", name="list_files")]) for n in range(5)])
+        return FakeModelProvider(
+            config, responses=[ModelResponse(tool_calls=[ToolCall(id=f"c{n}", name="list_files")]) for n in range(5)]
+        )
 
     monkeypatch.setattr("forge.agent.runtime.create_provider", provider)
 

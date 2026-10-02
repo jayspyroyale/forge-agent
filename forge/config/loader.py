@@ -123,7 +123,9 @@ def load_config(
     _apply(merged, sources, profiles[profile], f"profile:{profile}")
     for layer, data, path in (("user", user, user_path), ("project", project, project_path)):
         _apply(merged, sources, _without(data, "profiles"), f"{layer}:{path}")
-    _apply(merged, sources, _unflatten(env_values), None, env_sources={key: f"env:{ENV_VARS[key]}" for key in env_values})
+    _apply(
+        merged, sources, _unflatten(env_values), None, env_sources={key: f"env:{ENV_VARS[key]}" for key in env_values}
+    )
     _apply(merged, sources, _unflatten(cli_values), "cli")
     merged["profile"] = profile
     sources["profile"] = profile_source
@@ -196,8 +198,10 @@ def _read_toml(path: Path, layer: str) -> dict[str, Any]:
         key
         for key, value in flatten(data).items()
         if (SECRET_KEY.search(key.split(".")[-1]) and not is_env_reference(value))
-        # Credentials inside URLs are allowed in files and redacted whenever they are shown.
-        or (isinstance(value, str) and set(find_secrets(value)) - {"credentials in URL"})
+        # Legacy user URLs remain supported; committed project URLs must not hold credentials.
+        or (
+            isinstance(value, str) and set(find_secrets(value)) - ({"credentials in URL"} if layer == "user" else set())
+        )
     ]
     if secrets:
         where = "project config (it may be committed to Git)" if layer == "project" else "config files"

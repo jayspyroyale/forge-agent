@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Jason Raptis" }]
 keywords = ["ai", "agents", "llm", "cli", "mcp"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",

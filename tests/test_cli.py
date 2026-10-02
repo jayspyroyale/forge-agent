@@ -1,3 +1,5 @@
+import re
+
 from typer.testing import CliRunner
 
 from forge import __version__
@@ -10,7 +12,7 @@ def test_help():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "doctor" in result.output
-    assert "--version" in result.output
+    assert "--version" in re.sub(r"\x1b\[[0-9;]*m", "", result.output)
 
 
 def test_version():

@@ -1,7 +1,8 @@
 """Isolated workspaces for exploration candidates.
 
 Every candidate works in its own directory outside the user's project, so
-candidates cannot see or change each other's work or the user's files:
+built-in filesystem tools are scoped to that candidate. This is workspace
+separation, not an operating-system sandbox for shell commands:
 
     Git project      a linked worktree per candidate, checked out at HEAD
                      (`git worktree add --detach`); the user's working tree,
@@ -19,6 +20,7 @@ conflicts, or a repository without commits.
 """
 
 import shutil
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -105,6 +107,10 @@ class Isolation:
         self._repo = GitRepository(Path(baseline.repo_root)) if baseline.repo_root else None
         self._worktrees = WorktreeManager(self._repo, self.work_dir) if self._repo else None
         self._pristine = self.work_dir / "_baseline"
+        source = Path(baseline.repo_root or baseline.workspace_root).resolve()
+        if self.work_dir.is_relative_to(source) or source.is_relative_to(self.work_dir):
+            raise ExplorationError("Candidate directory must be outside and disjoint from the project")
+        self._active: dict[str, CandidateWorkspace] = {}
 
     def prepare(self) -> None:
         """Save what candidates start from, so it can be compared and applied later."""
@@ -113,13 +119,26 @@ class Isolation:
         if self.baseline.kind == "git":
             for path in self.baseline.uncommitted:
                 file = source / path
+                if not file.resolve().is_relative_to(source) or any(
+                    p.is_symlink() for p in (file, *file.parents) if p != source
+                ):
+                    raise ExplorationError(f"Cannot safely snapshot changed symlink: {path}")
                 if file.is_file():
                     write_file(self.records_dir / "baseline" / path, file.read_bytes())
         else:
             _copy_tree(Path(self.baseline.workspace_root), self._pristine)
 
     def create(self, candidate_id: str) -> CandidateWorkspace:
+        if not re.fullmatch(r"[A-Z]{1,3}", candidate_id):
+            raise ExplorationError("Invalid candidate ID")
         container = self.work_dir / candidate_id
+        if container.exists() or container.is_symlink():
+            raise ExplorationError("Candidate directory already exists")
+        root = container / self.baseline.subdir if self.baseline.kind == "git" and self.baseline.subdir else container
+        workspace = CandidateWorkspace(
+            candidate_id=candidate_id, container=str(container), root=str(root), kind=self.baseline.kind
+        )
+        self._active[candidate_id] = workspace
         if self.baseline.kind == "git":
             assert self._worktrees is not None and self.baseline.head is not None
             try:
@@ -131,10 +150,18 @@ class Isolation:
         else:
             _copy_tree(self._pristine, container)
             root = container
-        return CandidateWorkspace(candidate_id=candidate_id, container=str(container), root=str(root), kind=self.baseline.kind)
+        workspace = CandidateWorkspace(
+            candidate_id=candidate_id, container=str(container), root=str(root), kind=self.baseline.kind
+        )
+        self._active[candidate_id] = workspace
+        return workspace
 
     def remove(self, workspace: CandidateWorkspace) -> None:
         container = Path(workspace.container)
+        target = container.resolve()
+        if target == self.work_dir or not target.is_relative_to(self.work_dir):
+            raise ExplorationError("Refusing to remove a candidate outside the run directory")
+        self._active.pop(workspace.candidate_id, None)
         if workspace.kind == "git" and self._worktrees is not None:
             try:
                 self._worktrees.remove(container)
@@ -145,6 +172,8 @@ class Isolation:
 
     def cleanup(self) -> None:
         """Remove run-level scratch data (not candidate directories that were kept)."""
+        for workspace in list(self._active.values()):
+            self.remove(workspace)
         shutil.rmtree(self._pristine, ignore_errors=True)
         if self._worktrees is not None:
             self._worktrees.prune()
@@ -152,6 +181,9 @@ class Isolation:
             self.work_dir.rmdir()  # only if empty (no kept candidates)
         except OSError:
             pass
+
+    def retain(self, workspace: CandidateWorkspace) -> None:
+        self._active.pop(workspace.candidate_id, None)
 
     def baseline_content(self, path: str) -> bytes | None:
         """A workspace-relative file's content at the start of exploration (None: it did not exist)."""

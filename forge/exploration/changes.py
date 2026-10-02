@@ -43,7 +43,13 @@ def manifest(root: Path) -> dict[str, str]:
     hashes: dict[str, str] = {}
     for directory, dirnames, filenames in os.walk(root):
         current = Path(directory)
-        dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDED_DIRS and not (current / d).is_symlink())
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d not in EXCLUDED_DIRS
+            and not (current / d).is_symlink()
+            and not (hasattr(current / d, "is_junction") and (current / d).is_junction())
+        )
         for filename in sorted(filenames):
             path = current / filename
             if path.is_symlink() or not path.is_file():
@@ -81,7 +87,9 @@ def describe(
         patch_parts.append(_patch(delta, old, new))
     patch = "".join(patch_parts)
     if len(patch) > MAX_PATCH_CHARS:
-        patch = patch[:MAX_PATCH_CHARS] + f"\n[... patch truncated, {len(patch) - MAX_PATCH_CHARS} more characters ...]\n"
+        patch = (
+            patch[:MAX_PATCH_CHARS] + f"\n[... patch truncated, {len(patch) - MAX_PATCH_CHARS} more characters ...]\n"
+        )
     return described, patch
 
 

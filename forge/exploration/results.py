@@ -17,7 +17,9 @@ from forge.exploration.isolation import Baseline
 from forge.exploration.plans import ApproachPlan
 from forge.models.types import Usage
 
-CandidateStatus = Literal["completed", "verification_failed", "max_steps", "failed", "budget_exhausted", "crashed"]
+CandidateStatus = Literal[
+    "completed", "verification_failed", "max_steps", "failed", "budget_exhausted", "crashed", "cancelled"
+]
 RunStatus = Literal["planning", "running", "completed", "cancelled", "failed"]
 
 

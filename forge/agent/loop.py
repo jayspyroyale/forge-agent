@@ -40,10 +40,12 @@ from forge.context.compress import summarize_output
 from forge.context.engine import ContextBudget, ContextEngine
 from forge.context.items import BackgroundItem, Importance, Provenance, SourceType
 from forge.context.tokens import estimate_tokens
+from forge.concurrency import run_blocking
 from forge.models.base import ModelProvider
 from forge.models.budget import BudgetExhausted
 from forge.models.errors import ModelError
 from forge.models.types import Message, ModelResponse, ToolCall
+from forge.security.secret_scan import redact_data, redact_secrets
 from forge.tools.base import ToolResult
 from forge.tools.executor import ToolExecutor
 from forge.tools.registry import ToolNotFoundError
@@ -88,12 +90,11 @@ class Agent:
         self._changes_at_last_verification = 0
         self.context = ContextEngine(self.context_budget)
 
-    async def run(
-        self, task: str, task_id: str | None = None, background: Sequence[BackgroundItem] = ()
-    ) -> AgentState:
+    async def run(self, task: str, task_id: str | None = None, background: Sequence[BackgroundItem] = ()) -> AgentState:
         """Run `task`. `background` is context Forge gathered beforehand (relevant files, memory)."""
         self._reset()
         state = AgentState(task=task) if task_id is None else AgentState(task=task, task_id=task_id)
+        self.state = state
         if self.system_prompt:
             self._add(
                 state,
@@ -104,7 +105,12 @@ class Agent:
         # Background goes before the task, so the task is the last thing the model reads.
         for item in background:
             self._add(state, Message.user(item.content), item.provenance, importance=item.importance, key=item.key)
-        self._add(state, Message.user(task), Provenance(source=SourceType.USER, source_id="task"), importance=Importance.CRITICAL)
+        self._add(
+            state,
+            Message.user(task),
+            Provenance(source=SourceType.USER, source_id="task"),
+            importance=Importance.CRITICAL,
+        )
         self._emit(TaskStarted(task=task))
 
         while state.status == AgentStatus.RUNNING:
@@ -116,7 +122,10 @@ class Agent:
                 )
                 if self._needs_verification(state):
                     # No retries left, but record what state the code was left in.
-                    await self._verify(state)
+                    try:
+                        await self._verify(state)
+                    except BudgetExhausted as error:
+                        state.error = str(error)
                 break
             try:
                 self._guard()
@@ -217,7 +226,7 @@ class Agent:
         for check in self.verifier.checks:
             self._guard()
             self._emit(VerificationStarted(step=state.step, name=check.name, command=check.command))
-            result = await asyncio.to_thread(self.verifier.run_check, check)
+            result = await run_blocking(self.verifier.run_check, check, on_cancel=self.executor.context.cancelled.set)
             results.append(result)
             self._emit(VerificationFinished(step=state.step, result=result))
         round_ = VerificationRound(step=state.step, results=results)
@@ -226,12 +235,21 @@ class Agent:
 
     async def _ask_model(self, state: AgentState) -> ModelResponse | None:
         view = self.context.render()
+        if view.over_budget:
+            state.status = AgentStatus.FAILED
+            state.error = f"Context overflow: protected context needs {view.tokens} tokens (budget {view.budget})."
+            return None
         self._emit(ModelRequested(step=state.step, message_count=len(view.messages), context_tokens=view.tokens))
         try:
             response = await self.provider.generate(view.messages, tools=self.executor.registry.definitions())
+            response = ModelResponse.model_validate(response)
         except ModelError as error:
             state.status = AgentStatus.BUDGET_EXHAUSTED if isinstance(error, BudgetExhausted) else AgentStatus.FAILED
             state.error = str(error)
+            return None
+        except (ValueError, TypeError, AttributeError) as error:
+            state.status = AgentStatus.FAILED
+            state.error = f"Malformed model response ({type(error).__name__})"
             return None
         if response.usage is not None:
             state.usage = response.usage if state.usage is None else state.usage + response.usage
@@ -287,7 +305,7 @@ class Agent:
 
     def _emit(self, event: AgentEvent) -> None:
         if self.on_event is not None:
-            self.on_event(event)
+            self.on_event(type(event).model_validate(redact_data(event.model_dump())))
 
     def _guard(self) -> None:
         if self.operation_guard is not None:

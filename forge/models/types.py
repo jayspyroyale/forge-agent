@@ -7,7 +7,7 @@ reply back into a `ModelResponse`.
 
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Role = Literal["system", "user", "assistant", "tool"]
 
@@ -55,18 +55,17 @@ class ToolDefinition(BaseModel):
 
     name: str
     description: str
-    parameters: dict[str, Any] = Field(
-        default_factory=lambda: {"type": "object", "properties": {}}
-    )
+    parameters: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
 
 
 class Usage(BaseModel):
     """Token counts (and cost, when known) for one model call."""
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int | None = None
-    cost_usd: float | None = None
+    model_config = ConfigDict(allow_inf_nan=False)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def _fill_total(self) -> Self:

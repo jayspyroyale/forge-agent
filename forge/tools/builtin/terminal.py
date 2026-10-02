@@ -55,8 +55,14 @@ class RunCommand(Tool):
 
         settings = context.config.terminal
         timeout = min(args.timeout or settings.timeout, settings.max_timeout)
-        result = run_command(args.command, cwd=cwd, timeout=timeout, output_limit=settings.output_limit,
-                             deadline=context.deadline)
+        result = run_command(
+            args.command,
+            cwd=cwd,
+            timeout=timeout,
+            output_limit=settings.output_limit,
+            deadline=context.deadline,
+            cancel_event=context.cancelled,
+        )
 
         metadata = {
             "command": result.command,
