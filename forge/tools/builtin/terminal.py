@@ -35,6 +35,11 @@ class RunCommand(Tool):
     )
     Args = RunCommandArgs
     risk = RiskLevel.EXECUTE
+    context_source = "terminal"
+
+    def context_reference(self, arguments):
+        command = arguments.get("command")
+        return command if isinstance(command, str) else None
 
     def assess_risk(self, args: RunCommandArgs, context: ToolContext) -> RiskAssessment:
         return classify_command(args.command, context.workspace.root)

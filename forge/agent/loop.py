@@ -10,9 +10,15 @@ The agent only speaks Forge's normalized types: it does not know which model
 provider it is talking to, and it never runs a tool itself. Every tool call
 goes through the `ToolExecutor`, and verification is run by Forge's
 `Verifier`, never by trusting what the model says.
+
+Every message is recorded twice: in full in `state.messages` (the record),
+and as a `ContextItem` with provenance in the context engine, which decides
+what is actually sent to the model under the context budget.
 """
 
 import asyncio
+import json
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from forge.agent.events import (
@@ -30,10 +36,16 @@ from forge.agent.events import (
 from forge.agent.guidance import FailureTracker
 from forge.agent.prompts import EMPTY_RESPONSE_NOTE, LAST_STEP_NOTE, VERIFICATION_FAILED_NOTE
 from forge.agent.state import AgentState, AgentStatus, ToolExecution, VerificationRound
+from forge.context.compress import summarize_output
+from forge.context.engine import ContextBudget, ContextEngine
+from forge.context.items import BackgroundItem, Importance, Provenance, SourceType
+from forge.context.tokens import estimate_tokens
 from forge.models.base import ModelProvider
 from forge.models.errors import ModelError
 from forge.models.types import Message, ModelResponse, ToolCall
+from forge.tools.base import ToolResult
 from forge.tools.executor import ToolExecutor
+from forge.tools.registry import ToolNotFoundError
 from forge.verification.checks import VerificationResult
 from forge.verification.runner import Verifier
 
@@ -53,6 +65,7 @@ class Agent:
         verifier: Verifier | None = None,
         verification_attempts: int = DEFAULT_VERIFICATION_ATTEMPTS,
         on_event: EventHandler | None = None,
+        context_budget: ContextBudget | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -63,19 +76,32 @@ class Agent:
         self.verifier = verifier
         self.verification_attempts = verification_attempts
         self.on_event = on_event
+        self.context_budget = context_budget or ContextBudget()
         self._reset()
 
     def _reset(self) -> None:
         self._failures = FailureTracker()
         self._nudged_empty_reply = False
         self._changes_at_last_verification = 0
+        self.context = ContextEngine(self.context_budget)
 
-    async def run(self, task: str, task_id: str | None = None) -> AgentState:
+    async def run(
+        self, task: str, task_id: str | None = None, background: Sequence[BackgroundItem] = ()
+    ) -> AgentState:
+        """Run `task`. `background` is context Forge gathered beforehand (relevant files, memory)."""
         self._reset()
         state = AgentState(task=task) if task_id is None else AgentState(task=task, task_id=task_id)
         if self.system_prompt:
-            state.messages.append(Message.system(self.system_prompt))
-        state.messages.append(Message.user(task))
+            self._add(
+                state,
+                Message.system(self.system_prompt),
+                Provenance(source=SourceType.SYSTEM, source_id="system_prompt"),
+                importance=Importance.CRITICAL,
+            )
+        # Background goes before the task, so the task is the last thing the model reads.
+        for item in background:
+            self._add(state, Message.user(item.content), item.provenance, importance=item.importance, key=item.key)
+        self._add(state, Message.user(task), Provenance(source=SourceType.USER, source_id="task"), importance=Importance.CRITICAL)
         self._emit(TaskStarted(task=task))
 
         while state.status == AgentStatus.RUNNING:
@@ -106,13 +132,15 @@ class Agent:
         """One model call, plus any tool calls it requested."""
         state.step += 1
         if state.step == self.max_steps and self.max_steps > 1:
-            state.messages.append(Message.user(LAST_STEP_NOTE))
+            self._add_note(state, LAST_STEP_NOTE, "note:last_step")
         response = await self._ask_model(state)
         if response is None:
             return
 
-        state.messages.append(
-            Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
+        self._add(
+            state,
+            Message(role="assistant", content=response.content, tool_calls=response.tool_calls),
+            Provenance(source=SourceType.MODEL, source_id=self.provider.name, step=state.step),
         )
         if response.tool_calls:
             for call in response.tool_calls:
@@ -122,7 +150,7 @@ class Agent:
         if not response.content.strip() and not self._nudged_empty_reply:
             # An empty reply is usually a glitch, not a finished task: ask once more.
             self._nudged_empty_reply = True
-            state.messages.append(Message.user(EMPTY_RESPONSE_NOTE))
+            self._add_note(state, EMPTY_RESPONSE_NOTE, "note:empty_reply")
             return
         await self._finish(state, response.content)
 
@@ -133,7 +161,13 @@ class Agent:
             if not round_.passed:
                 retries_left = len(state.verification_rounds) < self.verification_attempts
                 if retries_left and state.step < self.max_steps:
-                    state.messages.append(Message.user(_failure_note(round_.results)))
+                    self._add(
+                        state,
+                        Message.user(_failure_note(round_.results)),
+                        Provenance(source=SourceType.VERIFICATION, source_id="checks", step=state.step),
+                        importance=Importance.HIGH,
+                        key="note:verification",
+                    )
                     return  # keep working
                 state.status = AgentStatus.VERIFICATION_FAILED
                 state.final_answer = answer
@@ -181,11 +215,10 @@ class Agent:
         return round_
 
     async def _ask_model(self, state: AgentState) -> ModelResponse | None:
-        self._emit(ModelRequested(step=state.step, message_count=len(state.messages)))
+        view = self.context.render()
+        self._emit(ModelRequested(step=state.step, message_count=len(view.messages), context_tokens=view.tokens))
         try:
-            response = await self.provider.generate(
-                state.messages, tools=self.executor.registry.definitions()
-            )
+            response = await self.provider.generate(view.messages, tools=self.executor.registry.definitions())
         except ModelError as error:
             state.status = AgentStatus.FAILED
             state.error = str(error)
@@ -203,12 +236,72 @@ class Agent:
         note = self._failures.note_for(call, result)
         if note:
             content += "\n\n" + note
-        state.messages.append(Message(role="tool", content=content, tool_call_id=call.id))
+        self._add_tool_result(state, call, result, content)
         self._emit(ToolFinished(step=state.step, call=call, result=result))
+
+    def _add(self, state: AgentState, message: Message, provenance: Provenance, **item) -> None:
+        state.messages.append(message)
+        self.context.add(message, provenance, **item)
+
+    def _add_note(self, state: AgentState, text: str, key: str) -> None:
+        provenance = Provenance(source=SourceType.SYSTEM, source_id="forge", step=state.step)
+        self._add(state, Message.user(text), provenance, importance=Importance.LOW, key=key)
+
+    def _add_tool_result(self, state: AgentState, call: ToolCall, result: ToolResult, content: str) -> None:
+        try:
+            tool = self.executor.registry.get(call.name)
+        except ToolNotFoundError:
+            tool = None
+        source = SourceType(tool.context_source) if tool is not None else SourceType.TOOL_RESULT
+        reference = tool.context_reference(call.arguments) if tool is not None else None
+        provenance = Provenance(
+            source=source,
+            source_id=reference,
+            step=state.step,
+            tool_name=call.name,
+            tool_call_id=call.id,
+        )
+        summary = None
+        if estimate_tokens(content) > self.context_budget.compress_above_tokens:
+            summary = summarize_output(call.name, call.arguments, content)
+        self._add(
+            state,
+            Message(role="tool", content=content, tool_call_id=call.id),
+            provenance,
+            # Errors are what the model most needs to see again; keep them longer.
+            importance=Importance.NORMAL if result.success else Importance.HIGH,
+            key=_context_key(tool, call, reference),
+            changes=result.metadata.get("changed_paths", []) if result.success else [],
+            summary=summary,
+        )
 
     def _emit(self, event: AgentEvent) -> None:
         if self.on_event is not None:
             self.on_event(event)
+
+
+def _context_key(tool, call: ToolCall, reference: str | None) -> str | None:
+    """What a tool result is about, so a later result about the same thing can supersede it.
+
+    Only repeatable observations get a key (reads, searches, commands); actions such as edits don't.
+    """
+    if tool is None:
+        return None
+    arguments = call.arguments
+    if call.name == "read_file" and reference and not (arguments.get("start_line") or arguments.get("max_lines")):
+        return "file:" + normalize_path(reference)
+    if call.name == "run_command" and reference:
+        return f"run_command:{reference}:{arguments.get('cwd', '.')}"
+    if tool.risk == "read":
+        return f"{call.name}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
+    return None
+
+
+def normalize_path(path: str) -> str:
+    path = path.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
 
 
 def _failure_note(results: list[VerificationResult]) -> str:

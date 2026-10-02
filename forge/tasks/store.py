@@ -3,6 +3,7 @@
     checkpoint.json   workspace snapshot taken before the task started
     journal.json      which files the task modified, with originals/ copies
     evidence.json     the task's proof of work (written when it finishes)
+    context.json      the context items the model saw, with their provenance
     undo-backup/      contents replaced by `forge tasks undo`
 
 The tasks directory ignores itself in Git (`.forge/tasks/.gitignore`), and
@@ -62,6 +63,10 @@ class TaskStore:
 
     def save_evidence(self, evidence: TaskEvidence) -> None:
         atomic_write_text(self.directory(evidence.task_id) / "evidence.json", evidence.model_dump_json(indent=2))
+
+    def save_context(self, task_id: str, manifest: list[dict]) -> None:
+        """Which context items the task used, where each came from, and how it was last sent."""
+        atomic_write_text(self.directory(task_id) / "context.json", json.dumps(manifest, indent=2))
 
     def load_evidence(self, task_id: str) -> TaskEvidence:
         path = self.directory(task_id) / "evidence.json"

@@ -80,6 +80,7 @@ class ReadFile(Tool):
     )
     Args = ReadFileArgs
     risk = RiskLevel.READ
+    context_source = "file"
 
     def execute(self, args: ReadFileArgs, context: ToolContext) -> ToolResult:
         path = context.workspace.resolve(args.path)
@@ -141,6 +142,7 @@ class FileExists(Tool):
     description = "Check whether a file or directory exists in the workspace."
     Args = FileExistsArgs
     risk = RiskLevel.READ
+    context_source = "file"
 
     def execute(self, args: FileExistsArgs, context: ToolContext) -> ToolResult:
         path = context.workspace.resolve(args.path)
@@ -170,6 +172,10 @@ class SearchText(Tool):
     )
     Args = SearchTextArgs
     risk = RiskLevel.READ
+
+    def context_reference(self, arguments):
+        pattern = arguments.get("pattern")
+        return f"search {pattern!r}" if pattern else None
 
     def execute(self, args: SearchTextArgs, context: ToolContext) -> ToolResult:
         workspace = context.workspace

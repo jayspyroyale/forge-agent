@@ -25,6 +25,7 @@ class TaskStarted(AgentEvent):
 class ModelRequested(AgentEvent):
     step: int
     message_count: int
+    context_tokens: int | None = None  # estimated size of what is sent
 
 
 class ModelResponded(AgentEvent):

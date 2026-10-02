@@ -18,6 +18,7 @@ from forge.config.loader import (
 )
 from forge.config.schema import (
     AgentSettings,
+    ContextSettings,
     ExplorationSettings,
     ForgeConfig,
     ModelSettings,
@@ -31,6 +32,7 @@ __all__ = [
     "ENV_VARS",
     "AgentSettings",
     "ConfigError",
+    "ContextSettings",
     "ExplorationSettings",
     "ForgeConfig",
     "LoadedConfig",

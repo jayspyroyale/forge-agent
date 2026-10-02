@@ -33,6 +33,7 @@ class WriteFile(Tool):
     )
     Args = WriteFileArgs
     risk = RiskLevel.WRITE
+    context_source = "file"
 
     def execute(self, args: WriteFileArgs, context: ToolContext) -> ToolResult:
         workspace = context.workspace
@@ -90,6 +91,7 @@ class EditFile(Tool):
     )
     Args = EditFileArgs
     risk = RiskLevel.WRITE
+    context_source = "file"
 
     def execute(self, args: EditFileArgs, context: ToolContext) -> ToolResult:
         workspace = context.workspace

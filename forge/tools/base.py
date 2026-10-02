@@ -87,6 +87,8 @@ class Tool(ABC):
     Args: ClassVar[type[ToolArgs]] = NoArgs
     # Tools that don't say otherwise are treated as running programs: they need approval by default.
     risk: ClassVar[RiskLevel] = RiskLevel.EXECUTE
+    # Where this tool's output comes from, for context provenance (a forge.context.SourceType value).
+    context_source: ClassVar[str] = "tool_result"
 
     @abstractmethod
     def execute(self, args: Any, context: ToolContext) -> ToolResult:
@@ -99,6 +101,11 @@ class Tool(ABC):
     def approval_key(self, args: Any) -> str:
         """What a "yes, for this session" approval covers. By default: any call to this tool."""
         return self.name
+
+    def context_reference(self, arguments: dict[str, Any]) -> str | None:
+        """What a call is about (a path, a command, ...), for provenance. Raw arguments: they may be invalid."""
+        path = arguments.get("path")
+        return path if isinstance(path, str) else None
 
     def definition(self) -> ToolDefinition:
         schema = self.Args.model_json_schema()

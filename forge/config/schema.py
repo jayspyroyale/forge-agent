@@ -49,6 +49,20 @@ class TerminalSettings(Section):
     output_limit: int = Field(default=12_000, ge=500)
 
 
+class ContextSettings(Section):
+    """How much conversation Forge sends to the model, and how it makes room (see forge.context)."""
+
+    # Estimated tokens per model call. Keep it below the model's context window, with headroom for its reply.
+    max_tokens: int = Field(default=64_000, ge=2_000)
+    # The most recent tool results are always sent in full.
+    keep_recent_outputs: int = Field(default=6, ge=0)
+    # Older tool output larger than this is replaced by a structural summary.
+    compress_above_tokens: int = Field(default=1_500, ge=50)
+    # Before the agent starts, point it at files that look relevant (name and text search, no embeddings).
+    retrieval: bool = True
+    retrieval_max_files: int = Field(default=8, ge=0, le=50)
+
+
 class UISettings(Section):
     verbose: bool = False
     debug: bool = False
@@ -96,6 +110,7 @@ class ForgeConfig(Section):
     permissions: PermissionPolicy = Field(default_factory=PermissionPolicy)
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     terminal: TerminalSettings = Field(default_factory=TerminalSettings)
+    context: ContextSettings = Field(default_factory=ContextSettings)
     ui: UISettings = Field(default_factory=UISettings)
     exploration: ExplorationSettings = Field(default_factory=ExplorationSettings)
 

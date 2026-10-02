@@ -45,7 +45,8 @@ class TaskRenderer:
 
     def _on_ModelRequested(self, event: ModelRequested) -> None:
         if self.verbose:
-            self.console.print(f"[dim]· step {event.step}: asking the model ({event.message_count} messages)[/dim]")
+            size = f", ~{event.context_tokens} tokens" if event.context_tokens is not None else ""
+            self.console.print(f"[dim]· step {event.step}: asking the model ({event.message_count} messages{size})[/dim]")
 
     def _on_ModelResponded(self, event: ModelResponded) -> None:
         response = event.response

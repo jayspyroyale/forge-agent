@@ -15,7 +15,10 @@ from forge.agent.events import EventHandler
 from forge.agent.loop import Agent
 from forge.agent.prompts import build_system_prompt
 from forge.agent.state import AgentState, new_task_id
-from forge.config import ForgeConfig
+from forge.config import ContextSettings, ForgeConfig
+from forge.context.engine import ContextBudget
+from forge.context.items import BackgroundItem, Importance, Provenance, SourceType
+from forge.context.retrieval import find_relevant_files, format_relevant_files
 from forge.evidence import TaskEvidence, build_evidence
 from forge.git.repo import GitRepository
 from forge.models.base import ModelProvider
@@ -74,7 +77,37 @@ def create_agent(
         verifier=verifier if config.agent.verification == "auto" else None,
         verification_attempts=config.agent.verification_attempts,
         on_event=on_event,
+        context_budget=context_budget(config.context),
     )
+
+
+def context_budget(settings: ContextSettings) -> ContextBudget:
+    return ContextBudget(
+        max_tokens=settings.max_tokens,
+        keep_recent_outputs=settings.keep_recent_outputs,
+        compress_above_tokens=settings.compress_above_tokens,
+    )
+
+
+def gather_background(config: ForgeConfig, workspace: Workspace, task: str) -> list[BackgroundItem]:
+    """Context Forge collects before the agent starts, each item with its provenance."""
+    items: list[BackgroundItem] = []
+    if config.context.retrieval and config.context.retrieval_max_files:
+        files = find_relevant_files(workspace, task, limit=config.context.retrieval_max_files)
+        if files:
+            items.append(
+                BackgroundItem(
+                    content=format_relevant_files(files),
+                    provenance=Provenance(
+                        source=SourceType.FILE,
+                        source_id=", ".join(item.path for item in files),
+                        detail="retrieval: file names, text search, uncommitted changes",
+                    ),
+                    importance=Importance.NORMAL,
+                    key="background:relevant_files",
+                )
+            )
+    return items
 
 
 class TaskOutcome(BaseModel):
@@ -105,7 +138,7 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
         journal = store.journal(task_id)
 
     agent = create_agent(config, before_write=journal.before_write if journal else None, **agent_options)
-    state = await agent.run(task, task_id=task_id)
+    state = await agent.run(task, task_id=task_id, background=gather_background(config, workspace, task))
 
     changes = compute_changes(snapshot, workspace, repo, journal.pre_images() if journal else None)
     if changes.changes:
@@ -120,6 +153,7 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
     )
     if store is not None:
         store.save_evidence(evidence)
+        store.save_context(task_id, agent.context.manifest())
     return TaskOutcome(state=state, evidence=evidence)
 
 

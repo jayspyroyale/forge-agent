@@ -40,7 +40,8 @@ ENV_KEYS: dict[str, str] = {
 # Dotted config key -> environment variable (the older shape, kept for callers that use it).
 ENV_VARS: dict[str, str] = {key: env for env, key in ENV_KEYS.items()}
 
-SECRET_KEY = re.compile(r"(api_?key|token|secret|password|passwd|credential)", re.IGNORECASE)
+# "token" only as a whole name or suffix (auth_token, GITHUB_TOKEN), so settings like max_tokens are not secrets.
+SECRET_KEY = re.compile(r"(api_?key|(^|_)token$|secret|password|passwd|credential)", re.IGNORECASE)
 _URL_USERINFO = re.compile(r"(?<=://)[^/@\s]+@")
 
 

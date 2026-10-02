@@ -21,6 +21,7 @@ class GitStatusTool(Tool):
     description = "Show the Git branch and which files are modified, staged, or untracked. Read-only."
     Args = NoArgs
     risk = RiskLevel.READ
+    context_source = "git"
 
     def execute(self, args: NoArgs, context: ToolContext) -> ToolResult:
         repo = _repository(context)
@@ -62,6 +63,7 @@ class GitDiffTool(Tool):
     )
     Args = GitDiffArgs
     risk = RiskLevel.READ
+    context_source = "git"
 
     def execute(self, args: GitDiffArgs, context: ToolContext) -> ToolResult:
         repo = _repository(context)
