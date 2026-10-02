@@ -83,9 +83,9 @@ Forge Doctor
 
 ✓ Python 3.12.10
 ✓ Forge package loaded (v0.1.0)
-✓ Workspace accessible
+✓ Workspace accessible (/path/to/your/project)
 ✓ Git installed (git version 2.x)
-✓ Configuration valid
+✓ Configuration valid (max_steps=20, debug=False)
 
 Everything looks good.
 ```
