@@ -22,6 +22,7 @@ class AgentStatus(StrEnum):
     VERIFICATION_FAILED = "verification_failed"  # finished, but Forge's checks still fail
     MAX_STEPS = "max_steps"  # stopped by the step limit
     FAILED = "failed"  # stopped by an error (for example the model provider failed)
+    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 class ToolExecution(BaseModel):

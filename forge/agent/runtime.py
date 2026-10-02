@@ -30,6 +30,7 @@ from forge.memory.models import MemoryRecord
 from forge.memory.retrieval import format_memories, relevant_memories
 from forge.memory.store import MemoryStore, MemoryStoreError, project_key
 from forge.models.base import ModelProvider
+from forge.models.budget import BudgetExhausted
 from forge.models.registry import create_provider
 from forge.security.permissions import Approver, PermissionEngine
 from forge.tasks.snapshot import compute_changes, take_snapshot
@@ -56,6 +57,8 @@ def create_agent(
     before_write: Callable[[Path], None] | None = None,
     on_event: EventHandler | None = None,
     extra_tools: Sequence[Tool] = (),
+    operation_guard: Callable[[], None] | None = None,
+    deadline: float | None = None,
 ) -> Agent:
     """Create an agent. Everything except `config` can be injected (tests, custom setups).
 
@@ -64,7 +67,7 @@ def create_agent(
     and `approver`. `checks` defaults to the checks detected in the workspace.
     """
     workspace = workspace_from_config(config)
-    context = ToolContext(workspace=workspace, config=config, before_write=before_write)
+    context = ToolContext(workspace=workspace, config=config, before_write=before_write, deadline=deadline)
     engine = permissions or PermissionEngine(config.permissions, approver)
     registry = tools or create_default_tools()
     for tool in extra_tools:
@@ -73,7 +76,7 @@ def create_agent(
 
     if checks is None:
         checks = detect_checks(workspace.root)
-    verifier = Verifier(workspace, checks, engine, config.terminal)
+    verifier = Verifier(workspace, checks, engine, config.terminal, deadline=deadline)
 
     system_prompt = build_system_prompt(
         "coding",
@@ -90,6 +93,7 @@ def create_agent(
         verification_attempts=config.agent.verification_attempts,
         on_event=on_event,
         context_budget=context_budget(config.context),
+        operation_guard=operation_guard,
     )
 
 
@@ -204,7 +208,11 @@ async def run_task(config: ForgeConfig, task: str, *, record: bool = True, **age
 
     changes = compute_changes(snapshot, workspace, repo, journal.pre_images() if journal else None)
     if changes.changes:
-        await agent.verify_final(state)
+        try:
+            await agent.verify_final(state)
+        except BudgetExhausted as error:
+            state.status = "budget_exhausted"
+            state.error = str(error)
     configured = agent.verifier.available_kinds if agent.verifier else set()
     evidence = build_evidence(
         state,

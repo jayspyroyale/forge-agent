@@ -23,6 +23,7 @@ from forge.agent.prompts import (
 from forge.context.retrieval import find_relevant_files
 from forge.exploration.plans import ApproachPlan, candidate_ids
 from forge.models.base import ModelProvider
+from forge.models.budget import BudgetExhausted
 from forge.models.errors import ModelError
 from forge.models.types import Message, Usage
 from forge.workspace import Workspace
@@ -85,6 +86,8 @@ class ApproachPlanner:
                 ]
             try:
                 response = await self.provider.generate(messages)
+            except BudgetExhausted:
+                raise
             except ModelError as error:
                 if accepted or existing:
                     notes.append(f"planner call failed: {error}")

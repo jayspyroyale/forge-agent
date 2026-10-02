@@ -20,11 +20,13 @@ class Verifier:
         checks: Sequence[VerificationCheck],
         permissions: PermissionEngine,
         terminal: TerminalSettings | None = None,
+        *, deadline: float | None = None,
     ) -> None:
         self.workspace = workspace
         self.checks = list(checks)
         self.permissions = permissions
         self.terminal = terminal or TerminalSettings()
+        self.deadline = deadline
 
     @property
     def available_kinds(self) -> set[CheckKind]:
@@ -52,6 +54,7 @@ class Verifier:
             cwd=self.workspace.root,
             timeout=self.terminal.max_timeout,
             output_limit=self.terminal.output_limit,
+            deadline=self.deadline,
         )
         return VerificationResult(
             name=check.name,

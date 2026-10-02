@@ -64,7 +64,10 @@ def run_command(
     timeout: float,
     output_limit: int = 12_000,
     env: Mapping[str, str] | None = None,
+    deadline: float | None = None,
 ) -> CommandResult:
+    if deadline is not None:
+        timeout = min(timeout, max(0.001, deadline - time.monotonic()))
     environment = dict(env) if env is not None else scrub_environment(os.environ)
     # Python caches compiled modules by source mtime and size. An agent can edit a
     # file twice within one second without changing its size, and a cached .pyc

@@ -24,6 +24,9 @@ class ModelSettings(Section):
     base_url: str | None = None  # for OpenAI-compatible servers
     temperature: float | None = Field(default=None, ge=0, le=2)  # None: the provider's default
     timeout: float = Field(default=120.0, gt=0)  # seconds to wait for a reply
+    max_response_tokens: int = Field(default=4096, ge=1)
+    input_cost_per_million: float | None = Field(default=None, ge=0)
+    output_cost_per_million: float | None = Field(default=None, ge=0)
 
 
 class AgentSettings(Section):
@@ -175,6 +178,18 @@ class ExplorationSettings(Section):
     # Where candidate workspaces (Git worktrees or copies) are created. None: <FORGE_HOME>/worktrees.
     workspace_dir: Path | None = None
     budget_usd: float | None = Field(default=None, ge=0)
+    max_api_cost: float | None = Field(default=None, ge=0)
+    max_tokens: int | None = Field(default=None, ge=0)
+    max_elapsed_time: float | None = Field(default=None, gt=0)
+    adaptive: bool = False
+    initial_approaches: int = Field(default=2, ge=1, le=10)
+    dominance_margin: float = Field(default=0.12, ge=0, le=1)
+    plateau_rounds: int = Field(default=2, ge=1)
+    experimental_generation: bool = False
+    strategy: Literal["different_approaches", "same_approach"] = "different_approaches"
+    model_assignment: Literal["round_robin", "automatic", "explicit"] = "round_robin"
+    model_pool: list[ModelSettings] = Field(default_factory=list)
+    candidate_models: dict[str, ModelSettings] = Field(default_factory=dict)
     # manual: you choose; assisted: Forge recommends, you confirm; autonomous: Forge chooses by policy.
     selection_mode: Literal["manual", "assisted", "autonomous"] = "assisted"
     weights: SelectionWeights = Field(default_factory=SelectionWeights)

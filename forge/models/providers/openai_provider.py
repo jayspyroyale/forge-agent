@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 
 from forge.config import ForgeConfig
 from forge.models.base import ModelProvider
+from forge.models.budget import priced_usage
 from forge.models.errors import (
     AuthenticationError,
     InvalidModelResponseError,
@@ -78,6 +79,7 @@ class OpenAIProvider(ModelProvider):
         request: dict[str, Any] = {
             "model": self.model,
             "messages": [_to_openai_message(message) for message in messages],
+            "max_completion_tokens": self.config.model.max_response_tokens,
         }
         names = {wire_tool_name(tool.name): tool.name for tool in tools or []}
         if tools:
@@ -103,7 +105,10 @@ class OpenAIProvider(ModelProvider):
                 f"'{self.name}' returned HTTP {error.status_code}: {_short_message(error)}"
             ) from error
 
-        return _from_openai_completion(completion, names)
+        response = _from_openai_completion(completion, names)
+        if response.usage is not None:
+            response.usage = priced_usage(response.usage, self.config.model)
+        return response
 
 
 class OllamaProvider(OpenAIProvider):

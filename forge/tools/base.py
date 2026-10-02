@@ -73,6 +73,7 @@ class ToolContext:
     # Called with a file's resolved path just before a tool modifies it, so the
     # task runtime can save the original (see forge.tasks.journal).
     before_write: Callable[[Path], None] | None = None
+    deadline: float | None = None  # monotonic run deadline, supplied by the controller
 
     def notify_before_write(self, path: Path) -> None:
         if self.before_write is not None:

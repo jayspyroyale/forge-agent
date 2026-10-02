@@ -39,16 +39,18 @@ from forge.exploration.events import (
     ExplorationEvent,
     ExplorationEventHandler,
     ExplorationFinished,
+    ExplorationDecision,
     ExplorationStarted,
     PlansReady,
 )
 from forge.exploration.isolation import ExplorationError, Isolation, preflight
 from forge.exploration.planner import ApproachPlanner, PlanningError, project_overview
-from forge.exploration.plans import ApproachPlan, candidate_brief
+from forge.exploration.plans import ApproachPlan, ModelChoice, candidate_brief, candidate_ids
 from forge.exploration.results import CandidateResult, ExplorationRun, PermissionSummary, Selection
 from forge.exploration.review import review_candidates
 from forge.exploration.store import ExplorationStore
 from forge.models.base import ModelProvider
+from forge.models.budget import BudgetExhausted, BudgetProvider, ExplorationBudget
 from forge.models.registry import create_provider
 from forge.security.permissions import PermissionEngine
 from forge.verification.detect import detect_checks
@@ -87,12 +89,17 @@ class ExplorationController:
         include_uncommitted: bool = True,
         keep_workspaces: bool = False,
     ) -> ExplorationRun:
-        count = approaches or self.config.exploration.approaches
+        count = approaches if approaches is not None else self.config.exploration.approaches
         if not 1 <= count <= MAX_APPROACHES:
             raise ExplorationError(f"approaches must be between 1 and {MAX_APPROACHES} (got {count})")
         baseline = preflight(self.workspace, include_uncommitted)
 
         run = ExplorationRun(run_id=new_task_id(), task=task, baseline=baseline)
+        settings = self.config.exploration
+        run.settings = self.config.model_dump(mode="json")
+        costs = [v for v in (settings.max_api_cost, settings.budget_usd) if v is not None]
+        self.budget = ExplorationBudget(max_tokens=settings.max_tokens,
+            max_cost=min(costs) if costs else None, max_seconds=settings.max_elapsed_time)
         records = self.store.create(run.run_id)
         self.store.save(run)
         self._emit(
@@ -108,13 +115,55 @@ class ExplorationController:
         isolation = Isolation(baseline, self.work_dir / run.run_id, records)
         try:
             isolation.prepare()
-            plans = await self._plan(run, task, count)
+            initial = min(count, settings.initial_approaches) if settings.adaptive else count
+            plans = await self._plan(run, task, initial)
             run.status = "running"
             self.store.save(run)
-            for plan in plans:
-                await self._run_candidate(run, plan, isolation, keep_workspaces)
+            plateau = 0
+            best = None
+            while plans:
+                for plan in plans:
+                    self.budget.check()
+                    await self._run_candidate(run, plan, isolation, keep_workspaces)
+                run.comparison = compare(run.candidates, settings.weights, settings.constraints)
+                self.budget.check()
+                if not settings.adaptive or len(run.candidates) >= count:
+                    run.stop_reason = "maximum candidates reached"
+                    break
+                ranking = run.comparison.ranking
+                winner = run.candidate(ranking[0]) if ranking else None
+                checks = run.comparison.measured_for(winner.candidate_id).checks if winner else {}
+                strong = bool(checks) and all(v == "verified" for v in checks.values())
+                if strong and (len(ranking) == 1 or (
+                    run.comparison.score(ranking[0]).total - run.comparison.score(ranking[1]).total
+                    >= settings.dominance_margin)):
+                    run.stop_reason = "strong verified candidate dominates"
+                    break
+                quality = (len(ranking), -(winner.additions + winner.deletions)) if winner else (0, 0)
+                plateau = plateau + 1 if best is not None and quality <= best else 0
+                best = max(best, quality) if best is not None else quality
+                if plateau >= settings.plateau_rounds:
+                    run.stop_reason = "improvement plateau reached"
+                    break
+                parents = ranking[:2] if settings.experimental_generation else []
+                next_task = task
+                if parents:
+                    next_task += "\nDesign a new implementation informed by this measured evidence; do not merge code:\n"
+                    next_task += "\n".join(f"{c.candidate_id}: {c.plan.summary}; checks={c.checks}; files={c.files_changed}; "
+                        f"dependencies={c.dependencies_added}" for c in run.candidates if c.candidate_id in parents)
+                self._emit(ExplorationDecision(action="continue", reason="Results are weak or close; trying another candidate"))
+                plans = await self._plan(run, next_task, 1, parents=parents)
+                if not plans:
+                    run.stop_reason = "planner produced no additional distinct approach"
+            if settings.adaptive:
+                self._emit(ExplorationDecision(action="stop", reason=run.stop_reason or "exploration complete"))
             await self.evaluate(run)
             run.status = "completed"
+        except BudgetExhausted as error:
+            run.stop_reason = str(error)
+            run.notes.append(str(error))
+            run.comparison = compare(run.candidates, settings.weights, settings.constraints)
+            run.status = "completed" if run.candidates else "failed"
         except PlanningError as error:
             run.status, run.error = "failed", str(error)
             raise ExplorationError(str(error)) from error
@@ -124,6 +173,10 @@ class ExplorationController:
             raise
         finally:
             run.finished_at = datetime.now(UTC)
+            run.accounted_tokens = self.budget.tokens
+            run.accounted_cost_usd = None if self.budget.unknown_cost else self.budget.cost
+            run.model_calls = self.budget.calls
+            run.estimated_usage_calls = self.budget.estimated_calls
             self.store.save(run)
             isolation.cleanup()
         self._emit(ExplorationFinished(run=run))
@@ -138,7 +191,7 @@ class ExplorationController:
         assessments = []
         if review:
             patches = {c.candidate_id: self.store.patch(run.run_id, c.candidate_id) for c in run.candidates}
-            result = await review_candidates(self.provider_factory(self.config), run.task, run.candidates, patches)
+            result = await review_candidates(self._provider(self.config), run.task, run.candidates, patches)
             assessments = result.assessments
             if result.usage is not None:
                 run.review_usage = result.usage if run.review_usage is None else run.review_usage + result.usage
@@ -154,15 +207,38 @@ class ExplorationController:
 
     # --- steps ----------------------------------------------------------------------------
 
-    async def _plan(self, run: ExplorationRun, task: str, count: int) -> list[ApproachPlan]:
-        planner = ApproachPlanner(self.provider_factory(self.config))
-        result = await planner.plan(task, count, overview=project_overview(self.workspace, task), start_index=len(run.plans))
-        run.plans += result.plans
-        if result.usage is not None:
-            run.planning_usage = result.usage if run.planning_usage is None else run.planning_usage + result.usage
-        run.notes += result.notes
-        self._emit(PlansReady(plans=result.plans, notes=result.notes))
-        return result.plans
+    def _provider(self, config: ForgeConfig) -> ModelProvider:
+        provider = self.provider_factory(config)
+        return BudgetProvider(provider, self.budget) if hasattr(self, "budget") else provider
+
+    async def _plan(self, run: ExplorationRun, task: str, count: int, *, parents=()) -> list[ApproachPlan]:
+        settings = self.config.exploration
+        planner = ApproachPlanner(self._provider(self.config))
+        if settings.strategy == "same_approach" and run.plans:
+            plans = [run.plans[0].model_copy(update={"id": cid}) for cid in candidate_ids(count, len(run.plans))]
+            usage, notes = None, []
+        else:
+            planned_count = 1 if settings.strategy == "same_approach" else count
+            result = await planner.plan(task, planned_count, overview=project_overview(self.workspace, task),
+                existing=run.plans, start_index=len(run.plans))
+            plans, usage, notes = result.plans, result.usage, result.notes
+            if settings.strategy == "same_approach" and plans:
+                plans = [plans[0].model_copy(update={"id": cid}) for cid in candidate_ids(count, len(run.plans))]
+        for index, plan in enumerate(plans, start=len(run.plans)):
+            choice = settings.candidate_models.get(plan.id)
+            if choice is None and settings.model_pool and settings.model_assignment != "explicit":
+                choice = settings.model_pool[index % len(settings.model_pool)]
+            if choice is not None:
+                plan.model = ModelChoice(**choice.model_dump(include={"provider", "name", "base_url"}))
+            if parents:
+                plan.parents = list(parents)
+                plan.generation = 1 + max(run.candidate(cid).plan.generation for cid in parents)
+        run.plans += plans
+        if usage is not None:
+            run.planning_usage = usage if run.planning_usage is None else run.planning_usage + usage
+        run.notes += notes
+        self._emit(PlansReady(plans=plans, notes=notes, round=max((p.generation for p in plans), default=1)))
+        return plans
 
     async def _run_candidate(
         self, run: ExplorationRun, plan: ApproachPlan, isolation: Isolation, keep: bool
@@ -199,10 +275,12 @@ class ExplorationController:
         outcome = await run_task(
             config,
             candidate_brief(run.task, plan),
-            provider=self.provider_factory(config),
+            provider=self._provider(config),
             permissions=self.permissions,
             checks=detect_checks(root, environment_root=self.workspace.root),
             on_event=handler,
+            operation_guard=self.budget.check,
+            deadline=self.budget.deadline,
         )
 
         deltas, patch = describe(compare_files(before, root), root, isolation.baseline_content)
@@ -241,6 +319,13 @@ class ExplorationController:
         }
         if plan.model is not None:
             chosen = {key: value for key, value in plan.model.model_dump().items() if value is not None}
+            settings = config.exploration
+            full = settings.candidate_models.get(plan.id)
+            if full is None and settings.model_pool and settings.model_assignment != "explicit":
+                index = candidate_ids(MAX_APPROACHES).index(plan.id)
+                full = settings.model_pool[index % len(settings.model_pool)]
+            if full is not None:
+                chosen = full.model_dump()
             updates["model"] = config.model.model_copy(update=chosen)
         return config.model_copy(update=updates)
 

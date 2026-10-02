@@ -107,6 +107,12 @@ class ExplorationRun(BaseModel):
     comparison: Comparison | None = None
     selection: Selection | None = None
     applied: AppliedRecord | None = None
+    stop_reason: str | None = None
+    accounted_tokens: int = 0
+    accounted_cost_usd: float | None = None
+    model_calls: int = 0
+    estimated_usage_calls: int = 0
+    settings: dict = Field(default_factory=dict)
 
     @property
     def final_evidence(self) -> TaskEvidence | None:

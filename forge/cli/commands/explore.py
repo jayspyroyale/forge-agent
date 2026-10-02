@@ -41,6 +41,10 @@ def explore(
     approaches: Annotated[
         int | None, typer.Option("--approaches", "-n", help=f"How many candidates to implement (1-{MAX_APPROACHES}).")
     ] = None,
+    adaptive: Annotated[bool | None, typer.Option("--adaptive/--fixed", help="Start small, add candidates only when evidence warrants it.")] = None,
+    max_tokens: Annotated[int | None, typer.Option("--max-tokens", help="Shared exploration token admission budget.")] = None,
+    max_cost: Annotated[float | None, typer.Option("--max-cost", help="Shared API dollar budget (requires configured prices).")] = None,
+    max_time: Annotated[float | None, typer.Option("--max-time", help="Exploration deadline in seconds.")] = None,
     mode: ModeOption = None,
     apply: Annotated[
         bool | None,
@@ -70,6 +74,10 @@ def explore(
             "model.name": model,
             "agent.max_steps": max_steps,
             "exploration.approaches": approaches,
+            "exploration.adaptive": adaptive,
+            "exploration.max_tokens": max_tokens,
+            "exploration.max_api_cost": max_cost,
+            "exploration.max_elapsed_time": max_time,
             "exploration.selection_mode": mode,
             "exploration.review": None if review is None else ("always" if review else "never"),
             "ui.verbose": True if verbose else None,

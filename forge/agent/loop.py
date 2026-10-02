@@ -18,7 +18,7 @@ what is actually sent to the model under the context budget.
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
 from forge.agent.events import (
@@ -41,6 +41,7 @@ from forge.context.engine import ContextBudget, ContextEngine
 from forge.context.items import BackgroundItem, Importance, Provenance, SourceType
 from forge.context.tokens import estimate_tokens
 from forge.models.base import ModelProvider
+from forge.models.budget import BudgetExhausted
 from forge.models.errors import ModelError
 from forge.models.types import Message, ModelResponse, ToolCall
 from forge.tools.base import ToolResult
@@ -66,6 +67,7 @@ class Agent:
         verification_attempts: int = DEFAULT_VERIFICATION_ATTEMPTS,
         on_event: EventHandler | None = None,
         context_budget: ContextBudget | None = None,
+        operation_guard: Callable[[], None] | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -77,6 +79,7 @@ class Agent:
         self.verification_attempts = verification_attempts
         self.on_event = on_event
         self.context_budget = context_budget or ContextBudget()
+        self.operation_guard = operation_guard
         self._reset()
 
     def _reset(self) -> None:
@@ -115,7 +118,12 @@ class Agent:
                     # No retries left, but record what state the code was left in.
                     await self._verify(state)
                 break
-            await self._step(state)
+            try:
+                self._guard()
+                await self._step(state)
+            except BudgetExhausted as error:
+                state.status = AgentStatus.BUDGET_EXHAUSTED
+                state.error = str(error)
 
         state.finished_at = datetime.now(UTC)
         self._emit(
@@ -144,6 +152,7 @@ class Agent:
         )
         if response.tool_calls:
             for call in response.tool_calls:
+                self._guard()
                 await self._run_tool(state, call)
             return
 
@@ -206,6 +215,7 @@ class Agent:
         self._changes_at_last_verification = state.change_count()
         results = []
         for check in self.verifier.checks:
+            self._guard()
             self._emit(VerificationStarted(step=state.step, name=check.name, command=check.command))
             result = await asyncio.to_thread(self.verifier.run_check, check)
             results.append(result)
@@ -220,7 +230,7 @@ class Agent:
         try:
             response = await self.provider.generate(view.messages, tools=self.executor.registry.definitions())
         except ModelError as error:
-            state.status = AgentStatus.FAILED
+            state.status = AgentStatus.BUDGET_EXHAUSTED if isinstance(error, BudgetExhausted) else AgentStatus.FAILED
             state.error = str(error)
             return None
         if response.usage is not None:
@@ -278,6 +288,10 @@ class Agent:
     def _emit(self, event: AgentEvent) -> None:
         if self.on_event is not None:
             self.on_event(event)
+
+    def _guard(self) -> None:
+        if self.operation_guard is not None:
+            self.operation_guard()
 
 
 def _context_key(tool, call: ToolCall, reference: str | None) -> str | None:
