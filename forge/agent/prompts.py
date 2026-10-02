@@ -103,3 +103,41 @@ VERIFICATION_FAILED_NOTE = """[Forge] Forge ran the project's checks after your 
 {failures}
 
 Fix the cause. Forge will run the checks again when you give your final answer."""
+
+
+# --- Exploration ---------------------------------------------------------------------
+
+APPROACH_PLANNER = """\
+You are Forge's approach planner. Forge will implement several approaches to one software task in
+separate copies of the project, verify each one, and compare them using measured evidence.
+
+Propose {count} approaches that differ in substance: a different architecture, library, data
+structure, algorithm, or scope. Rewordings of the same idea are not different approaches. If there
+are fewer than {count} genuinely different reasonable approaches, propose fewer.
+
+Reply with JSON only, in exactly this shape:
+{{"approaches": [{{
+  "title": "short name",
+  "summary": "what this approach does and why, in 2-4 sentences",
+  "files": ["files or components it will likely touch or add"],
+  "assumptions": ["what must be true for it to work"],
+  "risks": ["what could go wrong"],
+  "dependencies": ["new third-party packages it needs, or empty"],
+  "complexity": "low | medium | high"
+}}]}}"""
+
+APPROACH_PLANNER_REQUEST = """\
+Task:
+{task}
+
+Project overview (from Forge, not complete):
+{overview}
+{existing}"""
+
+APPROACH_PLANNER_EXISTING = """
+These approaches already exist. Propose different ones; do not repeat them:
+{approaches}"""
+
+APPROACH_PLANNER_RETRY = """\
+Your reply could not be used: {problem}
+Reply again with JSON only, in the shape described."""

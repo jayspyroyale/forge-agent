@@ -17,9 +17,15 @@ from forge.verification.checks import VerificationCheck
 _NPM_PLACEHOLDER_TEST = 'echo "Error: no test specified" && exit 1'
 
 
-def detect_checks(root: Path) -> list[VerificationCheck]:
+def detect_checks(root: Path, environment_root: Path | None = None) -> list[VerificationCheck]:
+    """Checks for the project at `root`.
+
+    `environment_root` is where to look for the project's virtual environment
+    when it is not inside `root` (exploration candidates are copies of the
+    project without its `.venv`, so they use the original project's).
+    """
     checks: list[VerificationCheck] = []
-    checks += _python_checks(root)
+    checks += _python_checks(root, environment_root or root)
     checks += _node_checks(root)
     checks += _rust_checks(root)
     checks += _go_checks(root)
@@ -29,10 +35,10 @@ def detect_checks(root: Path) -> list[VerificationCheck]:
 # --- Python --------------------------------------------------------------------
 
 
-def _python_checks(root: Path) -> list[VerificationCheck]:
+def _python_checks(root: Path, environment_root: Path) -> list[VerificationCheck]:
     pyproject = _read_toml(root / "pyproject.toml")
     tool = pyproject.get("tool", {}) if pyproject else {}
-    python = _python_command(root)
+    python = _python_command(root) if (root / ".venv").is_dir() else _python_command(environment_root)
     checks = []
 
     pytest_reason = _pytest_reason(root, tool)

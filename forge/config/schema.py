@@ -125,13 +125,11 @@ class SelectionWeights(Section):
 
 
 class ExplorationSettings(Section):
-    """Reserved for branching solution exploration (not implemented yet).
+    """`forge explore`: several candidate implementations, verified and compared (see forge.exploration)."""
 
-    Validated now so profiles and config files can already carry these values
-    and future phases don't need a config migration.
-    """
-
-    approaches: int = Field(default=1, ge=1, le=10)
+    approaches: int = Field(default=2, ge=1, le=10)  # candidates per exploration (10 is a hard limit)
+    # Where candidate workspaces (Git worktrees or copies) are created. None: <FORGE_HOME>/worktrees.
+    workspace_dir: Path | None = None
     budget_usd: float | None = Field(default=None, ge=0)
     weights: SelectionWeights = Field(default_factory=SelectionWeights)
     selection_mode: Literal["user", "recommend", "auto"] = "user"

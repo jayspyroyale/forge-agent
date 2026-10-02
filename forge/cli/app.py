@@ -14,6 +14,7 @@ import typer
 from forge import __version__
 from forge.cli.commands.config import config_app
 from forge.cli.commands.doctor import doctor
+from forge.cli.commands.explore import explore, explorations_app
 from forge.cli.commands.mcp import mcp_app
 from forge.cli.commands.memory import memory_app
 from forge.cli.commands.models import ask, models_app
@@ -55,6 +56,7 @@ def main_callback(
 
 
 app.command()(run)
+app.command()(explore)
 app.command(hidden=True)(session)
 app.command()(ask)
 app.command()(doctor)
@@ -64,6 +66,7 @@ app.add_typer(tasks_app, name="tasks")
 app.add_typer(config_app, name="config")
 app.add_typer(memory_app, name="memory")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(explorations_app, name="explorations")
 
 ROOT_OPTIONS = frozenset({"--help", "-h", "--version", "--install-completion", "--show-completion"})
 ROOT_VALUE_OPTIONS = frozenset({"--profile"})  # root options followed by a value

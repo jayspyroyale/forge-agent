@@ -14,7 +14,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-DEFAULT_PROTECTED_PATHS = (".git", ".forge/tasks")
+DEFAULT_PROTECTED_PATHS = (".git", ".forge/tasks", ".forge/explorations")
 
 # Directories that are noise for listing and searching.
 DEFAULT_IGNORED_DIRS = frozenset(

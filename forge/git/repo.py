@@ -32,6 +32,11 @@ class StatusEntry(BaseModel):
     def untracked(self) -> bool:
         return self.index == "?"
 
+    @property
+    def unmerged(self) -> bool:
+        """A merge conflict that has not been resolved."""
+        return "U" in (self.index, self.worktree) or (self.index, self.worktree) in {("A", "A"), ("D", "D")}
+
 
 class GitStatus(BaseModel):
     branch: str | None
@@ -115,6 +120,25 @@ class GitRepository:
             text=text,
             truncated=truncated,
         )
+
+    def git_dir(self) -> Path:
+        return Path(self.git("rev-parse", "--absolute-git-dir").strip())
+
+    def operation_in_progress(self) -> str | None:
+        """A merge, rebase, cherry-pick, revert, or bisect that has not finished, if any."""
+        git_dir = self.git_dir()
+        markers = {
+            "MERGE_HEAD": "a merge",
+            "rebase-merge": "a rebase",
+            "rebase-apply": "a rebase or am",
+            "CHERRY_PICK_HEAD": "a cherry-pick",
+            "REVERT_HEAD": "a revert",
+            "BISECT_LOG": "a bisect",
+        }
+        for marker, operation in markers.items():
+            if (git_dir / marker).exists():
+                return operation
+        return None
 
     def head_content(self, path: str) -> bytes | None:
         """A file's content at HEAD, or None if it did not exist there."""
